@@ -7,11 +7,19 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.identity import clean_email, find_account
 from ..models.doctor import Doctor
 from ..models.hospital import Hospital
 from ..models.schemas import DoctorCreate, DoctorRead
 
 router = APIRouter(prefix="/api/doctors", tags=["doctors"])
+
+# Legacy short ids used by the early demo data / in-memory store.
+_LEGACY_HOSPITAL_IDS = {"HSP-01": "HSP1001", "HSP-02": "HSP1002", "HSP-03": "HSP1005"}
+
+
+def _normalize_hospital_id(hospital_id: str) -> str:
+    return _LEGACY_HOSPITAL_IDS.get(hospital_id, hospital_id)
 
 
 @router.get("/{doctor_id}/accessible-patients")
@@ -101,48 +109,37 @@ def get_doctor(doctor_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 @router.post("", response_model=DoctorRead, status_code=201)
 def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db)):
-    """Register a new doctor into PostgreSQL."""
-    hosp_id = payload.hospital_id
-    if hosp_id == "HSP-01":
-        hosp_id = "HSP1001"
-    elif hosp_id == "HSP-02":
-        hosp_id = "HSP1002"
-    elif hosp_id == "HSP-03":
-        hosp_id = "HSP1005"
+    """Register a new doctor. Writes only to ``doctor`` and never to another role's table."""
+    hosp_id = _normalize_hospital_id(payload.hospital_id)
+    if not db.scalar(select(Hospital).where(Hospital.hospital_id == hosp_id)):
+        raise HTTPException(status_code=400, detail=f"Hospital '{payload.hospital_id}' does not exist")
 
-    # Verify hospital exists
-    hospital = db.scalar(select(Hospital).where(Hospital.hospital_id == hosp_id))
-    if not hospital:
-        # Fallback to first hospital if unknown
-        first_hosp = db.scalar(select(Hospital).limit(1))
-        hosp_id = first_hosp.hospital_id if first_hosp else "HSP1001"
+    clean = clean_email(payload.email)
+    if clean:
+        owner = find_account(db, clean)
+        if owner and owner["role"] == "doctor":
+            return db.scalar(select(Doctor).where(Doctor.doctor_id == owner["id"]))
+        if owner:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Email '{clean}' is already registered under the {owner['role']} role. It cannot also be a doctor.",
+            )
 
     doc_id = payload.doctor_id
-    if not doc_id:
+    if not doc_id or db.scalar(select(Doctor).where(Doctor.doctor_id == doc_id)):
         max_num = db.scalar(
             text("SELECT COALESCE(MAX(SUBSTRING(doctor_id FROM '[0-9]+')::integer), 1000) FROM doctor")
         ) or 1000
         doc_id = f"DOC-{max_num + 1}"
-    else:
-        existing = db.scalar(select(Doctor).where(Doctor.doctor_id == doc_id))
-        if existing:
-            if payload.email and existing.email and existing.email.lower() == payload.email.lower():
-                return existing
-            max_num = db.scalar(
-                text("SELECT COALESCE(MAX(SUBSTRING(doctor_id FROM '[0-9]+')::integer), 1000) FROM doctor")
-            ) or 1000
-            doc_id = f"DOC-{max_num + 1}"
 
     lic = payload.license_number
     if not lic:
         lic = f"MCI-DL-{random.randint(10000, 99999)}"
-    else:
-        existing_lic = db.scalar(select(Doctor).where(Doctor.license_number == lic))
-        if existing_lic:
-            lic = f"{lic}-{random.randint(100, 999)}"
+    elif db.scalar(select(Doctor).where(Doctor.license_number == lic)):
+        lic = f"{lic}-{random.randint(100, 999)}"
 
     raw_name = (payload.full_name or "").strip()
-    formatted_name = raw_name if (raw_name.lower().startswith("dr.") or raw_name.lower().startswith("dr ")) else f"Dr. {raw_name}"
+    formatted_name = raw_name if raw_name.lower().startswith(("dr.", "dr ")) else f"Dr. {raw_name}"
 
     doc = Doctor(
         doctor_id=doc_id,
@@ -150,7 +147,7 @@ def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db)):
         full_name=formatted_name,
         specialization=payload.specialization,
         license_number=lic,
-        email=payload.email,
+        email=clean or None,
         contact_number=payload.contact_number,
     )
     db.add(doc)
@@ -175,7 +172,11 @@ def update_doctor(doctor_id: str, payload: dict[str, Any], db: Session = Depends
     if "specialization" in payload and payload["specialization"]:
         doc.specialization = str(payload["specialization"]).strip()
     if "email" in payload:
-        doc.email = str(payload["email"]).strip() if payload["email"] else None
+        new_email = clean_email(payload["email"])
+        owner = find_account(db, new_email) if new_email else None
+        if owner and not (owner["role"] == "doctor" and owner["id"] == doctor_id):
+            raise HTTPException(status_code=409, detail=f"Email '{new_email}' is already registered under the {owner['role']} role.")
+        doc.email = new_email or None
     if "contact_number" in payload:
         doc.contact_number = str(payload["contact_number"]).strip() if payload["contact_number"] else None
     if "hospital_id" in payload and payload["hospital_id"]:

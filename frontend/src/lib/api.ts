@@ -41,6 +41,25 @@ async function apiRequest<T>(
   return res.json() as Promise<T>;
 }
 
+/** Readable message from an error thrown by apiRequest ("FastAPI Error (409): {"detail": ...}"). */
+export function apiErrorMessage(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const brace = raw.indexOf("{");
+  if (brace >= 0) {
+    try {
+      const detail = JSON.parse(raw.slice(brace)).detail;
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) return detail.map((d: { msg?: string }) => d.msg).join("; ");
+    } catch {}
+  }
+  return raw;
+}
+
+export function apiErrorStatus(err: unknown): number {
+  const m = /FastAPI Error \((\d{3})\)/.exec(err instanceof Error ? err.message : "");
+  return m ? Number(m[1]) : 500;
+}
+
 // ---------------------------------------------------------------------------
 // Types matching FastAPI schemas
 // ---------------------------------------------------------------------------
@@ -323,7 +342,7 @@ export const api = {
 
   // Auth & Admin
   lookupUser: (email: string) =>
-    apiRequest<{ role: "patient" | "doctor" | "admin"; id: string | null; name: string; email: string }>(
+    apiRequest<{ role: "patient" | "doctor" | "admin" | null; id: string | null; name: string; email: string; found?: boolean }>(
       `/api/auth/lookup?email=${encodeURIComponent(email)}`
     ),
   registerAdmin: (email: string, name: string) =>

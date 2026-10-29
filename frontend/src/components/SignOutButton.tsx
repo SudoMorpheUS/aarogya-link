@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { LogOut } from "lucide-react";
-import { auth, fbSignOut } from "@/lib/firebase";
+import { signOut as sbSignOut } from "@/lib/supabase";
 import { signOut } from "@/lib/actions";
 
 export function SignOutButton() {
@@ -11,9 +11,9 @@ export function SignOutButton() {
   const handleSignOut = () => {
     startTransition(async () => {
       try {
-        await fbSignOut(auth);
+        await sbSignOut();
       } catch (e) {
-        console.warn("Firebase sign-out note:", e);
+        console.warn("Supabase sign-out note:", e);
       }
       try {
         await fetch("/api/auth/session", { method: "DELETE" });

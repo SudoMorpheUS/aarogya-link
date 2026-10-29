@@ -18,19 +18,20 @@ DELETE FROM visit WHERE patient_id = 'PAT-IN-105002';
 DELETE FROM patient WHERE patient_id = 'PAT-IN-105002';
 
 -- 2. Insert or update demo Doctors
-INSERT INTO doctor (doctor_id, hospital_id, full_name, specialization, license_number)
+INSERT INTO doctor (doctor_id, hospital_id, full_name, specialization, license_number, email)
 VALUES
-  ('DOC-01', 'HSP1001', 'Dr. Rohan Mehta', 'Cardiology', 'MCI-TN-88210'),
-  ('DOC-02', 'HSP1001', 'Dr. Priya Krishnan', 'Endocrinology', 'MCI-TN-77344'),
-  ('DOC-03', 'HSP1002', 'Dr. Arjun Singh', 'Emergency Medicine', 'MCI-KA-55102'),
-  ('DOC-04', 'HSP1002', 'Dr. Nisha Kapoor', 'Internal Medicine', 'MCI-KA-60918'),
-  ('DOC-05', 'HSP1005', 'Dr. Vikram Sharma', 'Orthopedics', 'MCI-DL-10455'),
-  ('DOC-06', 'HSP1005', 'Dr. Leela Menon', 'Pulmonology', 'MCI-DL-22190')
+  ('DOC-01', 'HSP1001', 'Dr. Rohan Mehta', 'Cardiology', 'MCI-TN-88210', 'rohan.mehta@example.in'),
+  ('DOC-02', 'HSP1001', 'Dr. Priya Krishnan', 'Endocrinology', 'MCI-TN-77344', 'priya.krishnan@example.in'),
+  ('DOC-03', 'HSP1002', 'Dr. Arjun Singh', 'Emergency Medicine', 'MCI-KA-55102', 'arjun.singh@example.in'),
+  ('DOC-04', 'HSP1002', 'Dr. Nisha Kapoor', 'Internal Medicine', 'MCI-KA-60918', 'nisha.kapoor@example.in'),
+  ('DOC-05', 'HSP1005', 'Dr. Vikram Sharma', 'Orthopedics', 'MCI-DL-10455', 'vikram.sharma@example.in'),
+  ('DOC-06', 'HSP1005', 'Dr. Leela Menon', 'Pulmonology', 'MCI-DL-22190', 'leela.menon@example.in')
 ON CONFLICT (doctor_id) DO UPDATE SET
   hospital_id = EXCLUDED.hospital_id,
   full_name = EXCLUDED.full_name,
   specialization = EXCLUDED.specialization,
-  license_number = EXCLUDED.license_number;
+  license_number = EXCLUDED.license_number,
+  email = EXCLUDED.email;
 
 -- 3. Insert or update demo Patients
 INSERT INTO patient (patient_id, full_name, date_of_birth, gender, blood_group, contact_number, email)
@@ -40,7 +41,8 @@ VALUES
   ('PAT-IN-1003', 'Fatima Rahman', '1999-07-21', 'F', 'A+', '9810011122', 'fatima.rahman@example.in'),
   ('PAT-IN-1004', 'Rajesh Patel', '1981-01-09', 'M', 'AB+', '9725019988', 'rajesh.patel@example.in'),
   ('PAT-IN-1005', 'Meera Nair', '1955-05-30', 'F', 'O-', '9447012233', 'meera.nair@example.in'),
-  ('PAT-IN-1006', 'Devansh Gupta', '2007-09-14', 'M', 'B-', '9876543210', 'devansh.gupta@example.in')
+  ('PAT-IN-1006', 'Devansh Gupta', '2007-09-14', 'M', 'B-', '9876543210', 'devansh.gupta@example.in'),
+  ('PAT-IN-105001', 'Mudit Jha', '1998-04-12', 'M', 'O+', '9876500105', 'mudit@gmail.com')
 ON CONFLICT (patient_id) DO UPDATE SET
   full_name = EXCLUDED.full_name,
   date_of_birth = EXCLUDED.date_of_birth,
@@ -87,6 +89,23 @@ BEGIN
 
     INSERT INTO lab_test (visit_id, test_name, result, unit, test_date)
     VALUES (new_vid, 'TSH', '5.2', 'mIU/L', '2026-07-03');
+  END IF;
+
+  -- Mudit Jha (PAT-IN-105001): cardiology follow-up with Dr. Rohan Mehta at Apollo
+  IF NOT EXISTS (SELECT 1 FROM visit WHERE patient_id = 'PAT-IN-105001' AND doctor_id = 'DOC-01') THEN
+    INSERT INTO visit (patient_id, hospital_id, doctor_id, visit_date, visit_type, chief_complaint)
+    VALUES ('PAT-IN-105001', 'HSP1001', 'DOC-01', '2026-09-08 11:00:00', 'OPD', 'Palpitations and mild chest discomfort')
+    RETURNING visit_id INTO new_vid;
+
+    INSERT INTO diagnosis (visit_id, disease_code, description, diagnosed_date)
+    VALUES (new_vid, 'I49.9', 'Cardiac arrhythmia, unspecified', '2026-09-08');
+
+    INSERT INTO prescription (visit_id, medicine_name, dosage, frequency, duration)
+    VALUES (new_vid, 'Metoprolol', '25 mg', 'Twice daily', '30 days');
+
+    INSERT INTO lab_test (visit_id, test_name, result, unit, test_date)
+    VALUES (new_vid, 'ECG', 'Sinus tachycardia', NULL, '2026-09-08'),
+           (new_vid, 'TSH', '2.1', 'mIU/L', '2026-09-08');
   END IF;
 
   -- Karthik Iyer (PAT-IN-1002) Visit 3

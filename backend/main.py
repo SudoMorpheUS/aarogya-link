@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from src.core.config import DEBUG
 from src.core.database import SessionLocal
+from src.core.identity import ensure_admin_table
 from src.routers.audit import router as audit_router
 from src.routers.auth import router as auth_router
 from src.routers.consents import router as consents_router
@@ -18,6 +19,10 @@ from src.routers.visits import router as visits_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        ensure_admin_table()
+    except Exception as e:
+        print(f"Warning: failed to prepare admin_user table: {e}")
     # Startup: Ensure all PostgreSQL SERIAL sequences are synced to MAX(id) + 1
     try:
         with SessionLocal() as db:

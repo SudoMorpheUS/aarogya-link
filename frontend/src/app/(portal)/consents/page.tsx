@@ -33,7 +33,7 @@ const CITY_STATE_MAP: Record<string, [string, string]> = {
   indore: ["Indore", "Madhya Pradesh"],
 };
 
-export function parseLocationState(address: string | null | undefined): { city: string; state: string; formatted: string } {
+function parseLocationState(address: string | null | undefined): { city: string; state: string; formatted: string } {
   if (!address) return { city: "—", state: "—", formatted: "—" };
   const lower = address.toLowerCase();
   for (const [key, [city, state]] of Object.entries(CITY_STATE_MAP)) {

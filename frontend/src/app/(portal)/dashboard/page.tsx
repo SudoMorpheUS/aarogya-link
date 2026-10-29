@@ -281,23 +281,24 @@ async function PatientDashboard({ session, showAll }: { session: Session; showAl
 
 async function DoctorDashboard({ session, showAll, selected }: { session: Session; showAll: boolean; selected?: string }) {
   const id = session.id!;
-  let doctor = store.getDoctor(id);
+  let doctor: any = null;
   let hospitalName = "";
-  if (!doctor) {
-    try {
-      const d = await api.getDoctor(id);
-      if (d) {
-        doctor = {
-          doctor_id: d.doctor_id,
-          hospital_id: d.hospital_id,
-          full_name: d.full_name,
-          specialization: d.specialization,
-          license_number: d.license_number || "MCI-GEN-00000",
-          email: `${d.doctor_id.toLowerCase()}@hospital.in`,
-        };
-        hospitalName = d.hospital_name || "";
-      }
-    } catch {}
+  try {
+    // The database record is the source of truth; the in-memory store invents a record for any DOC-* id.
+    const d = await api.getDoctor(id);
+    if (d) {
+      doctor = {
+        doctor_id: d.doctor_id,
+        hospital_id: d.hospital_id,
+        full_name: d.full_name,
+        specialization: d.specialization,
+        license_number: d.license_number || "MCI-GEN-00000",
+        email: d.email || "",
+      };
+      hospitalName = d.hospital_name || "";
+    }
+  } catch {
+    doctor = store.getDoctor(id);
   }
   if (!doctor) {
     doctor = {

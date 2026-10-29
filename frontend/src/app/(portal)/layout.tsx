@@ -214,22 +214,24 @@ async function Aside({ session }: { session: Session }) {
 
 export default async function PortalLayout({ children }: { children: ReactNode }) {
   const session = await requireSession();
-  let doctor = session.role === "doctor" ? store.getDoctor(session.id!) : null;
-  let patient = session.role === "patient" ? store.getPatient(session.id!) : null;
-  if (session.role === "doctor" && !doctor && session.id) {
+  let doctor: any = null;
+  let patient: any = null;
+  if (session.role === "doctor" && session.id) {
     try {
-      const d = await api.getDoctor(session.id);
-      if (d) doctor = d as any;
-    } catch {}
+      doctor = await api.getDoctor(session.id);
+    } catch {
+      doctor = store.getDoctor(session.id);
+    }
   }
-  if (session.role === "patient" && !patient && session.id) {
+  if (session.role === "patient" && session.id) {
     try {
-      const p = await api.getPatient(session.id);
-      if (p) patient = p as any;
-    } catch {}
+      patient = await api.getPatient(session.id);
+    } catch {
+      patient = store.getPatient(session.id);
+    }
   }
   const name = doctor?.full_name ?? patient?.full_name ?? "Administrator";
-  const where = doctor ? (store.getHospital(doctor.hospital_id)?.hospital_name ?? "") : patient ? maskId(patient.patient_id) : "All hospitals";
+  const where = doctor ? (doctor.hospital_name ?? store.getHospital(doctor.hospital_id)?.hospital_name ?? "") : patient ? maskId(patient.patient_id) : "All hospitals";
 
   const attention = attentionFor(session);
   const queue = session.role === "doctor" ? store.patientsWithAccess(session.id!).map((p) => p.patient_id) : [];

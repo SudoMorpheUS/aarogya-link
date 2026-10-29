@@ -3,12 +3,11 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff, LogIn, UserPlus, Shield, Stethoscope, UserCheck, Sparkles, CheckCircle2 } from "lucide-react";
 import {
-  auth,
+  supabase,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  updateProfile,
-  getFriendlyAuthErrorMessage,
-} from "@/lib/firebase";
+  getFriendlySupabaseErrorMessage,
+} from "@/lib/supabase";
 import type { Hospital, Role } from "@/lib/types";
 
 interface AuthCardProps {
@@ -102,15 +101,16 @@ export function AuthCard({ hospitals }: AuthCardProps) {
     setSuccess(`Signing in as ${persona.label}...`);
 
     try {
-      // 1. Try Firebase Authentication
+      // 1. Try Supabase Authentication
       try {
-        await signInWithEmailAndPassword(auth, persona.email, DEMO_PASSWORD);
+        await signInWithEmailAndPassword(persona.email, DEMO_PASSWORD);
       } catch (authErr: any) {
-        if (authErr.code === "auth/user-not-found" || authErr.code === "auth/invalid-credential") {
-          try {
-            await createUserWithEmailAndPassword(auth, persona.email, DEMO_PASSWORD);
-          } catch {}
-        }
+        try {
+          await createUserWithEmailAndPassword(persona.email, DEMO_PASSWORD, {
+            full_name: persona.label,
+            role: persona.role,
+          });
+        } catch {}
       }
 
       // 2. Establish server session
@@ -150,20 +150,23 @@ export function AuthCard({ hospitals }: AuthCardProps) {
     setLoading(true);
 
     try {
-      let firebaseEmail = email.trim();
+      let userEmail = email.trim().toLowerCase();
       let displayName: string | null = null;
 
       try {
-        const userCredential = await signInWithEmailAndPassword(auth, firebaseEmail, password);
-        firebaseEmail = userCredential.user.email || firebaseEmail;
-        displayName = userCredential.user.displayName;
+        const { user } = await signInWithEmailAndPassword(userEmail, password);
+        userEmail = user?.email || userEmail;
+        displayName = user?.user_metadata?.full_name || null;
       } catch (authErr: any) {
-        // If it's one of the demo passwords, auto-create in Firebase if needed
+        // If it's one of the demo passwords, auto-create in Supabase if needed
         const isDefaultPassword = password === DEMO_PASSWORD || password === "ArogyaLink@2026";
         if (isDefaultPassword) {
           try {
-            const userCredential = await createUserWithEmailAndPassword(auth, firebaseEmail, password);
-            firebaseEmail = userCredential.user.email || firebaseEmail;
+            const { user } = await createUserWithEmailAndPassword(userEmail, password, {
+              full_name: userEmail.split("@")[0],
+            });
+            userEmail = user?.email || userEmail;
+            displayName = user?.user_metadata?.full_name || null;
           } catch {}
         } else {
           throw authErr;
@@ -173,7 +176,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
       let savedRole: string | null = null;
       try {
         savedRole =
-          localStorage.getItem(`arogya_role_${firebaseEmail.toLowerCase()}`) ||
+          localStorage.getItem(`arogya_role_${userEmail}`) ||
           localStorage.getItem("arogya_last_role");
       } catch {}
 
@@ -181,7 +184,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: firebaseEmail,
+          email: userEmail,
           displayName,
           preferredRole: savedRole || undefined,
         }),
@@ -194,7 +197,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
 
       try {
         if (res.session?.role) {
-          localStorage.setItem(`arogya_role_${firebaseEmail.toLowerCase()}`, res.session.role);
+          localStorage.setItem(`arogya_role_${userEmail}`, res.session.role);
           localStorage.setItem("arogya_last_role", res.session.role);
         }
       } catch {}
@@ -202,7 +205,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
       setSuccess("Authenticated successfully. Redirecting to dashboard...");
       window.location.href = "/dashboard";
     } catch (err: any) {
-      setError(getFriendlyAuthErrorMessage(err.code || "") || err.message);
+      setError(err.message || "Sign in failed");
       setLoading(false);
     }
   };
@@ -228,17 +231,46 @@ export function AuthCard({ hospitals }: AuthCardProps) {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const user = userCredential.user;
+      const cleanEmail = email.trim().toLowerCase();
 
-      try {
-        await updateProfile(user, { displayName: fullName.trim() });
-      } catch (profileErr) {
-        console.warn("Could not set displayName:", profileErr);
+      // Make sure the email is free in every role before any account is created.
+      const check = await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: cleanEmail, checkOnly: true }),
+      }).then((r) => r.json());
+      if (!check.success) {
+        throw new Error(check.error || "Could not verify this email. Please try again.");
+      }
+      if (check.exists) {
+        throw new Error(`This email is already registered under the ${check.role} role. Please sign in instead.`);
       }
 
       try {
-        localStorage.setItem(`arogya_role_${email.trim().toLowerCase()}`, role);
+        await createUserWithEmailAndPassword(cleanEmail, password, {
+          full_name: fullName.trim(),
+          role,
+          date_of_birth: role === "patient" ? dateOfBirth : undefined,
+          gender: role === "patient" ? gender : undefined,
+          bloodGroup: role === "patient" ? bloodGroup : undefined,
+          contactNumber: role === "patient" ? contactNumber : undefined,
+          hospitalId: role === "doctor" ? hospitalId : undefined,
+          specialization: role === "doctor" ? specialization : undefined,
+          licenseNumber: role === "doctor" ? licenseNumber : undefined,
+        });
+      } catch (createErr: any) {
+        if (!createErr.message?.includes("already exists") && !createErr.message?.includes("already registered")) {
+          throw createErr;
+        }
+        try {
+          await signInWithEmailAndPassword(cleanEmail, password);
+        } catch {
+          throw createErr;
+        }
+      }
+
+      try {
+        localStorage.setItem(`arogya_role_${cleanEmail}`, role);
         localStorage.setItem("arogya_last_role", role);
       } catch {}
 
@@ -246,7 +278,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: user.email || email.trim(),
+          email: cleanEmail,
           displayName: fullName.trim(),
           role,
           isRegistration: true,
@@ -268,7 +300,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
       setSuccess("Account created successfully! Redirecting...");
       window.location.href = "/dashboard";
     } catch (err: any) {
-      setError(getFriendlyAuthErrorMessage(err.code || "") || err.message);
+      setError(err.message || "Registration failed");
       setLoading(false);
     }
   };
@@ -325,7 +357,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             <div>
               <h2 style={{ fontSize: "var(--fs-lg)", marginBottom: 4 }}>Sign in with Email</h2>
               <p className="muted" style={{ fontSize: "var(--fs-sm)" }}>
-                Access unified health records, consents, and hospital portals with Firebase.
+                Access unified health records, consents, and hospital portals with Supabase.
               </p>
             </div>
 
@@ -368,7 +400,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             </div>
 
             <button type="submit" className="btn" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
-              {loading && !activePersonaEmail ? "Authenticating with Firebase..." : "Sign in to AarogyaLink"}
+              {loading && !activePersonaEmail ? "Authenticating with Supabase..." : "Sign in to AarogyaLink"}
             </button>
 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
@@ -444,7 +476,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             <div>
               <h2 style={{ fontSize: "var(--fs-lg)", marginBottom: 4 }}>Create AarogyaLink Account</h2>
               <p className="muted" style={{ fontSize: "var(--fs-sm)" }}>
-                Register with email and password, powered by Firebase Authentication.
+                Register with email and password, powered by Supabase Authentication.
               </p>
             </div>
 
@@ -656,7 +688,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             ) : null}
 
             <button type="submit" className="btn" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
-              {loading ? "Creating Firebase account..." : "Register & Sign in"}
+              {loading ? "Creating Supabase account..." : "Register & Sign in"}
             </button>
           </form>
         )}

@@ -24,6 +24,8 @@ def create_visit(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict
 
     if not patient_id or not doctor_id:
         raise HTTPException(status_code=400, detail="patient_id and doctor_id are required")
+    if visit_type not in ("OPD", "Emergency", "Inpatient"):
+        raise HTTPException(status_code=400, detail="visit_type must be OPD, Emergency or Inpatient")
 
     patient = db.scalar(select(Patient).where(Patient.patient_id == patient_id))
     if not patient:
@@ -45,7 +47,11 @@ def create_visit(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict
         chief_complaint=chief_complaint,
     )
     db.add(visit)
-    db.flush()  # Populates visit.visit_id
+    try:
+        db.flush()  # Populates visit.visit_id
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     today = datetime.date.today()
 

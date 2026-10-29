@@ -69,16 +69,15 @@ export default async function ChartPage({
       ? "emergency"
       : "none";
 
-  let doctor = session.id ? store.getDoctor(session.id) : null;
+  let doctor: any = null;
   let hospitalName = "";
-  if (!doctor && session.id) {
+  if (session.id) {
     try {
-      const d = await api.getDoctor(session.id);
-      if (d) {
-        doctor = d as any;
-        hospitalName = d.hospital_name || "";
-      }
-    } catch {}
+      doctor = await api.getDoctor(session.id);
+      hospitalName = doctor?.hospital_name || "";
+    } catch {
+      doctor = store.getDoctor(session.id);
+    }
   }
   if (!hospitalName && doctor) {
     hospitalName = store.getHospital(doctor.hospital_id)?.hospital_name || "Hospital";

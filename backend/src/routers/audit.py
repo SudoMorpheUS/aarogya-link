@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 def list_audit_logs(
     patient_id: str | None = None,
     doctor_id: str | None = None,
+    action: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
@@ -41,6 +42,8 @@ def list_audit_logs(
         stmt = stmt.where(AuditLog.patient_id == patient_id)
     if doctor_id:
         stmt = stmt.where(AuditLog.doctor_id == doctor_id)
+    if action:
+        stmt = stmt.where(AuditLog.action == action)
     stmt = stmt.limit(limit)
 
     rows = db.execute(stmt).all()

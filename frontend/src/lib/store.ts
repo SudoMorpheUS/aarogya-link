@@ -182,9 +182,6 @@ export const listDoctors = () => db().doctors;
 
 export function findAdminByEmail(email: string): { email: string; name: string } | null {
   const norm = email.trim().toLowerCase();
-  if (norm.startsWith("admin@") || norm.includes("admin")) {
-    return { email: norm, name: "Central Administrator" };
-  }
   return db().admins.find((a) => a.email.toLowerCase() === norm) ?? null;
 }
 

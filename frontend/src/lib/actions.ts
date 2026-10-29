@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { clearSession, requireSession, setSession } from "./session";
 import * as store from "./store";
-import { api } from "./api";
+import { api, apiErrorMessage } from "./api";
 
 export interface FormState {
   error?: string;
@@ -15,120 +15,6 @@ const text = (fd: FormData, key: string) => String(fd.get(key) ?? "").trim();
 const list = (fd: FormData, key: string) => fd.getAll(key).map((v) => String(v).trim());
 
 // ---------- session ----------
-
-export interface FirebaseSessionPayload {
-  email: string;
-  displayName?: string | null;
-  role?: "patient" | "doctor" | "admin";
-  dateOfBirth?: string;
-  gender?: "M" | "F" | "O";
-  bloodGroup?: string;
-  contactNumber?: string;
-  hospitalId?: string;
-  specialization?: string;
-  licenseNumber?: string;
-}
-
-export async function syncFirebaseUserSession(
-  payload: FirebaseSessionPayload,
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    const email = payload.email.trim().toLowerCase();
-    
-    // Look up user from FastAPI backend or fallback to local store
-    let lookup: { role: "patient" | "doctor" | "admin"; id: string | null; name: string } | null = null;
-    try {
-      lookup = await api.lookupUser(email);
-    } catch {
-      lookup = store.findUserByEmail(email);
-    }
-
-    let role: "patient" | "doctor" | "admin" = payload.role ?? lookup?.role ?? "patient";
-    let id: string | null = lookup?.id ?? null;
-    let name: string = payload.displayName || lookup?.name || email.split("@")[0];
-
-    if (role === "admin") {
-      try {
-        await api.registerAdmin(email, name);
-      } catch {}
-      store.registerAdmin({ email, name });
-      id = null;
-    } else if (role === "doctor") {
-      if (!id) {
-        let hospId = payload.hospitalId || "HSP1001";
-        if (hospId === "HSP-01") hospId = "HSP1001";
-        else if (hospId === "HSP-02") hospId = "HSP1002";
-        else if (hospId === "HSP-03") hospId = "HSP1005";
-
-        const docName = name.startsWith("Dr.") || name.startsWith("Dr ") ? name : `Dr. ${name}`;
-        try {
-          const doc = await api.createDoctor({
-            doctor_id: `DOC-${Date.now().toString().slice(-4)}`,
-            hospital_id: hospId,
-            full_name: docName,
-            specialization: payload.specialization || "General Medicine",
-            license_number: payload.licenseNumber || `LIC-${Date.now().toString().slice(-6)}`,
-            email,
-            contact_number: payload.contactNumber || "9800000000",
-          } as any);
-          id = doc.doctor_id;
-          name = docName;
-          try {
-            store.registerDoctor({
-              full_name: docName,
-              hospital_id: hospId,
-              specialization: payload.specialization || "General Medicine",
-              license_number: doc.license_number || payload.licenseNumber || "LIC-999999",
-              email,
-            });
-          } catch {}
-        } catch {
-          id = store.registerDoctor({
-            full_name: docName,
-            hospital_id: hospId,
-            specialization: payload.specialization || "General Medicine",
-            license_number: payload.licenseNumber || "LIC-999999",
-            email,
-          });
-        }
-      }
-    } else {
-      if (!id) {
-        try {
-          const pat = await api.registerPatient({
-            full_name: name,
-            date_of_birth: payload.dateOfBirth || "1995-01-01",
-            gender: (payload.gender as any) || "M",
-            blood_group: payload.bloodGroup || "O+",
-            contact_number: payload.contactNumber || "9800000000",
-            email,
-          });
-          id = pat.patient_id;
-        } catch {
-          id = store.registerPatient({
-            full_name: name,
-            date_of_birth: payload.dateOfBirth || "1995-01-01",
-            gender: payload.gender || "M",
-            blood_group: payload.bloodGroup || "O+",
-            contact_number: payload.contactNumber || "9800000000",
-            email,
-          });
-        }
-      }
-    }
-
-    await setSession({
-      role,
-      id,
-      email,
-      displayName: name,
-    });
-
-    return { success: true };
-  } catch (err) {
-    return { success: false, error: (err as Error).message };
-  }
-}
 
 export async function signIn(formData: FormData): Promise<void> {
   const role = text(formData, "role");
@@ -301,28 +187,17 @@ export async function registerPatientAction(_prev: FormState, formData: FormData
     const emailVal = text(formData, "email");
     let id: string;
     
-    // Post to FastAPI backend -> inserts into PostgreSQL patient table
-    try {
-      const res = await api.registerPatient({
-        full_name: text(formData, "full_name"),
-        date_of_birth: text(formData, "date_of_birth"),
-        gender: text(formData, "gender") as any,
-        blood_group: text(formData, "blood_group"),
-        contact_number: text(formData, "contact_number"),
-        email: emailVal,
-      });
-      id = res.patient_id;
-    } catch (apiErr) {
-      console.warn("FastAPI registerPatient error:", apiErr);
-      id = store.registerPatient({
-        full_name: text(formData, "full_name"),
-        date_of_birth: text(formData, "date_of_birth"),
-        gender: text(formData, "gender"),
-        blood_group: text(formData, "blood_group"),
-        contact_number: text(formData, "contact_number"),
-        email: emailVal,
-      });
-    }
+    // Post to FastAPI backend -> inserts into the PostgreSQL patient table only.
+    // No in-memory fallback: a patient that is not in the database must not appear to exist.
+    const res = await api.registerPatient({
+      full_name: text(formData, "full_name"),
+      date_of_birth: text(formData, "date_of_birth"),
+      gender: text(formData, "gender") as any,
+      blood_group: text(formData, "blood_group"),
+      contact_number: text(formData, "contact_number"),
+      email: emailVal,
+    });
+    id = res.patient_id;
 
     // If registered by a doctor at a hospital/clinic, automatically create initial intake consent
     let initialConsentMsg = "";
@@ -360,6 +235,6 @@ export async function registerPatientAction(_prev: FormState, formData: FormData
 
     return { ok: `Registered ${id}.${loginDetails}${consentPrompt}` };
   } catch (e) {
-    return { error: (e as Error).message };
+    return { error: apiErrorMessage(e) };
   }
 }

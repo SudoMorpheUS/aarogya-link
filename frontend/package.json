@@ -8,14 +8,13 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
-    "firebase": "^13.0.0",
     "lucide-react": "^0.468.0",
     "next": "16.4.2",
     "react": "19.3.0",

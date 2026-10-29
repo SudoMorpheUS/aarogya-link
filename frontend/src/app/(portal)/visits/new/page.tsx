@@ -56,16 +56,15 @@ export default async function NewVisitPage({ searchParams }: { searchParams: Pro
     redirect(`/patients/${patient.patient_id}`);
   }
 
-  let doctor = store.getDoctor(session.id!);
+  let doctor: any = null;
   let hospitalName = "";
-  if (!doctor && session.id) {
+  if (session.id) {
     try {
-      const d = await api.getDoctor(session.id);
-      if (d) {
-        doctor = d as any;
-        hospitalName = d.hospital_name || "";
-      }
-    } catch {}
+      doctor = await api.getDoctor(session.id);
+      hospitalName = doctor?.hospital_name || "";
+    } catch {
+      doctor = store.getDoctor(session.id);
+    }
   }
   if (!doctor) {
     doctor = {

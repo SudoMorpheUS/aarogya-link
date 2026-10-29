@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.identity import clean_email, find_account
 from ..models.doctor import Doctor
 from ..models.hospital import Hospital
 from ..models.patient import Patient
@@ -14,6 +15,18 @@ from ..models.schemas import PatientCreate, PatientRead
 from ..models.visit import Diagnosis, LabTest, Prescription, Visit
 
 router = APIRouter(prefix="/api/patients", tags=["patients"])
+
+
+def _patient_dict(p: Patient) -> dict[str, Any]:
+    return {
+        "patient_id": p.patient_id,
+        "full_name": p.full_name,
+        "date_of_birth": p.date_of_birth.isoformat() if p.date_of_birth else "",
+        "gender": p.gender,
+        "blood_group": p.blood_group,
+        "contact_number": p.contact_number,
+        "email": p.email,
+    }
 
 
 @router.get("")
@@ -70,59 +83,94 @@ def get_patient(patient_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 
 @router.post("", status_code=201)
 def register_patient(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Register a new patient into PostgreSQL."""
+    """Register a new patient. Writes only to ``patient`` and never to another role's table."""
     full_name = str(payload.get("full_name", "")).strip()
     if not full_name:
         raise HTTPException(status_code=400, detail="Full name is required")
 
-    # Generate patient_id if not provided
+    gender = str(payload.get("gender") or "M").upper()[:1]
+    if gender not in ("M", "F", "O"):
+        raise HTTPException(status_code=400, detail="Gender must be M, F or O")
+
+    dob_val = payload.get("date_of_birth") or "2000-01-01"
+    try:
+        dob = datetime.date.fromisoformat(dob_val) if isinstance(dob_val, str) else dob_val
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD") from None
+
+    clean = clean_email(payload.get("email"))
+    if clean:
+        owner = find_account(db, clean)
+        if owner and owner["role"] == "patient":
+            return _patient_dict(db.scalar(select(Patient).where(Patient.patient_id == owner["id"])))
+        if owner:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Email '{clean}' is already registered under the {owner['role']} role. It cannot also be a patient.",
+            )
+
     patient_id = payload.get("patient_id")
     if not patient_id:
         max_num = db.scalar(
             text("SELECT COALESCE(MAX(SUBSTRING(patient_id FROM '[0-9]+')::integer), 1000) FROM patient")
         ) or 1000
         patient_id = f"PAT-IN-{max_num + 1}"
-
-    existing = db.scalar(select(Patient).where(Patient.patient_id == patient_id))
-    if existing:
+    elif db.scalar(select(Patient).where(Patient.patient_id == patient_id)):
         raise HTTPException(status_code=400, detail=f"Patient ID {patient_id} already exists")
-
-    dob_val = payload.get("date_of_birth", "2000-01-01")
-    if isinstance(dob_val, str):
-        dob = datetime.date.fromisoformat(dob_val)
-    else:
-        dob = dob_val
 
     pat = Patient(
         patient_id=patient_id,
         full_name=full_name,
         date_of_birth=dob,
-        gender=str(payload.get("gender", "M")).upper()[:1],
-        blood_group=payload.get("blood_group", "O+"),
-        contact_number=str(payload.get("contact_number", "9800000000")),
-        email=payload.get("email") or None,
+        gender=gender,
+        blood_group=payload.get("blood_group") or "O+",
+        contact_number=str(payload.get("contact_number") or "9800000000"),
+        email=clean or None,
     )
     db.add(pat)
     try:
         db.commit()
         db.refresh(pat)
-        return {
-            "patient_id": pat.patient_id,
-            "full_name": pat.full_name,
-            "date_of_birth": pat.date_of_birth.isoformat(),
-            "gender": pat.gender,
-            "blood_group": pat.blood_group,
-            "contact_number": pat.contact_number,
-            "email": pat.email,
-        }
+        return _patient_dict(pat)
     except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{patient_id}/timeline")
-def get_patient_timeline(patient_id: str, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    """Retrieve full longitudinal health timeline for a patient across all hospitals."""
+def get_patient_timeline(
+    patient_id: str,
+    doctor_id: str | None = Query(default=None, description="Doctor requesting access for consent verification"),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """Retrieve full longitudinal health timeline for a patient across all hospitals.
+
+    Enforces data privacy: if doctor_id is specified, verifies fn_has_consent or active break-glass.
+    """
+    if doctor_id:
+        has_consent = db.scalar(
+            text("SELECT fn_has_consent(:pid, :did)"),
+            {"pid": patient_id, "did": doctor_id},
+        )
+        if not has_consent:
+            emergency_active = db.scalar(
+                text("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM audit_log
+                        WHERE patient_id = :pid
+                          AND doctor_id = :did
+                          AND action = 'EMERGENCY_OVERRIDE'
+                          AND action_time >= (NOW() - INTERVAL '30 minutes')
+                    )
+                """),
+                {"pid": patient_id, "did": doctor_id},
+            )
+            if not emergency_active:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access Denied: No active consent or emergency break-glass override granted for this patient.",
+                )
+
     visits = (
         db.scalars(
             select(Visit)
@@ -257,7 +305,11 @@ def update_patient(patient_id: str, payload: dict[str, Any], db: Session = Depen
     if "contact_number" in payload and payload["contact_number"]:
         pat.contact_number = str(payload["contact_number"]).strip()
     if "email" in payload:
-        pat.email = str(payload["email"]).strip() if payload["email"] else None
+        new_email = clean_email(payload["email"])
+        owner = find_account(db, new_email) if new_email else None
+        if owner and not (owner["role"] == "patient" and owner["id"] == patient_id):
+            raise HTTPException(status_code=409, detail=f"Email '{new_email}' is already registered under the {owner['role']} role.")
+        pat.email = new_email or None
     if "gender" in payload and payload["gender"]:
         pat.gender = str(payload["gender"]).upper()[:1]
     if "date_of_birth" in payload and payload["date_of_birth"]:
