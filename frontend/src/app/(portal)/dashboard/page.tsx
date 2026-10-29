@@ -330,22 +330,23 @@ async function DoctorDashboard({ session, showAll, selected }: { session: Sessio
   // Include accessible patients from PostgreSQL
   for (const pid of accessiblePatientIds) {
     if (!queueMap.has(pid)) {
-      let p = store.getPatient(pid);
+      let p: any = null;
+      try {
+        const apiP = await api.getPatient(pid);
+        if (apiP) {
+          p = {
+            patient_id: apiP.patient_id,
+            full_name: apiP.full_name,
+            date_of_birth: apiP.date_of_birth,
+            gender: apiP.gender as any,
+            blood_group: apiP.blood_group as any,
+            contact_number: apiP.contact_number,
+            email: apiP.email,
+          };
+        }
+      } catch {}
       if (!p) {
-        try {
-          const apiP = await api.getPatient(pid);
-          if (apiP) {
-            p = {
-              patient_id: apiP.patient_id,
-              full_name: apiP.full_name,
-              date_of_birth: apiP.date_of_birth,
-              gender: apiP.gender as any,
-              blood_group: apiP.blood_group as any,
-              contact_number: apiP.contact_number,
-              email: apiP.email,
-            };
-          }
-        } catch {}
+        p = store.getPatient(pid);
       }
       if (p) {
         queueMap.set(pid, {

@@ -12,16 +12,20 @@ export default async function HospitalsPage() {
   let hospitals: ApiHospitalCaseload[] = [];
   let doctors: ApiDoctor[] = [];
 
-  try {
-    const [hospData, docData] = await Promise.all([
-      api.getHospitalCaseload(),
-      api.getDoctors(undefined, 1000),
-    ]);
-    hospitals = hospData;
-    doctors = docData;
-  } catch (err) {
-    console.warn("Falling back to local store for hospitals:", err);
+  const [hospitalsResult, doctorsResult] = await Promise.allSettled([
+    api.getHospitalCaseload(),
+    api.getDoctors(undefined, 5000),
+  ]);
+  if (hospitalsResult.status === "fulfilled") {
+    hospitals = hospitalsResult.value;
+  } else {
+    console.warn("Falling back to local store for hospitals:", hospitalsResult.reason);
     hospitals = store.caseload() as any;
+  }
+  if (doctorsResult.status === "fulfilled") {
+    doctors = doctorsResult.value;
+  } else {
+    console.warn("Doctor roster unavailable:", doctorsResult.reason);
     doctors = store.listDoctors() as any;
   }
 

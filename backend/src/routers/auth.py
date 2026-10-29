@@ -4,11 +4,22 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from ..core.config import AUTH_MODE
 from ..core.database import get_db
 from ..core.identity import clean_email, find_account
+from ..core.local_auth import authenticate_local, hash_password
 from ..models.admin_user import AdminUser
+from ..models.auth_user import AuthUser
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _require_local_auth() -> None:
+    if AUTH_MODE != "local":
+        raise HTTPException(
+            status_code=404,
+            detail="Local authentication is disabled. Set AUTH_MODE=local to enable it.",
+        )
 
 
 @router.get("/lookup")
@@ -26,6 +37,74 @@ def lookup_user(
     if account:
         return {**account, "found": True}
     return {"role": None, "id": None, "name": clean.split("@")[0], "email": clean, "found": False}
+
+
+@router.post("/local/login")
+def local_login(payload: dict[str, Any], db: Session = Depends(get_db)):
+    """Verify an email/password against the local ``auth_user`` table."""
+    _require_local_auth()
+    email = clean_email(payload.get("email"))
+    password = str(payload.get("password") or "")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    account = authenticate_local(db, email, password)
+    if not account:
+        # Deliberately generic to avoid confirming which emails exist.
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    return {**account, "found": True}
+
+
+@router.post("/local/password")
+def set_local_password(payload: dict[str, Any], db: Session = Depends(get_db)):
+    """Attach a password to an existing profile (first-time claim/registration).
+
+    This deliberately refuses to overwrite an existing credential: a second
+    caller must use the sign-in flow, never reset another user's password.
+    """
+    _require_local_auth()
+    email = clean_email(payload.get("email"))
+    password = str(payload.get("password") or "")
+    role = str(payload.get("role") or "").strip().lower()
+    user_id = str(payload.get("id") or "").strip() or None
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    if role not in {"admin", "doctor", "patient"}:
+        raise HTTPException(status_code=400, detail="A valid account role is required")
+
+    account = find_account(db, email)
+    if not account:
+        raise HTTPException(status_code=404, detail="No profile exists for this email.")
+    if account["role"] != role:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This email belongs to the {account['role']} role, not {role}.",
+        )
+    if (account["id"] or None) != user_id:
+        raise HTTPException(status_code=409, detail="Profile id does not match this email.")
+    if db.get(AuthUser, email):
+        raise HTTPException(
+            status_code=409,
+            detail="A password is already set for this account. Please sign in instead.",
+        )
+
+    db.add(
+        AuthUser(
+            email=email,
+            password_hash=hash_password(password),
+            role=role,
+            user_id=user_id,
+        )
+    )
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "ok", "email": email, "role": role}
 
 
 @router.post("/register-admin")

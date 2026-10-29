@@ -58,7 +58,7 @@ def list_consents(
     patient_id: str | None = None,
     doctor_id: str | None = None,
     hospital_id: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=5000),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """List consent grants decorated with patient, hospital, doctor specialization, and location/state."""
@@ -127,7 +127,7 @@ def list_consents(
 
 @router.get("/distribution")
 def get_patient_consent_distribution(
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=5000),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """Return patient consent distribution showing which hospitals each patient has authorized."""

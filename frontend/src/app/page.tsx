@@ -8,6 +8,9 @@ import { listHospitals } from "@/lib/store";
 
 export default async function Landing() {
   if (await getSession()) redirect("/dashboard");
+  const authMode = (process.env.AUTH_MODE || "supabase").trim().toLowerCase() === "local"
+    ? "local"
+    : "supabase";
   let hospitals: any[] = [];
   try {
     hospitals = await api.getHospitals();
@@ -38,7 +41,7 @@ export default async function Landing() {
       </section>
 
       <section aria-label="Authentication">
-        <AuthCard hospitals={hospitals} />
+        <AuthCard hospitals={hospitals} authMode={authMode} />
       </section>
     </main>
   );

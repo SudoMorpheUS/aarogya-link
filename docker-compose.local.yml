@@ -1,0 +1,62 @@
+# ============================================================================
+# Local PostgreSQL stack (opt-in).
+#
+# Run the default Supabase stack:
+#   docker compose up --build
+#
+# Run this fully local stack:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#
+# Data persists in ./database/pgdata on the host. Delete that directory (after
+# `docker compose down`) to re-run the schema/seed scripts from scratch.
+# ============================================================================
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aarogya-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: arogya
+      TZ: "Asia/Kolkata"
+    ports:
+      # Host port 5434 avoids clashing with a PostgreSQL already on 5432/5433.
+      # Inside the compose network the backend still uses postgres:5432.
+      - "${LOCAL_PG_PORT:-5434}:5432"
+    volumes:
+      - ./database/pgdata:/var/lib/postgresql/data
+      - ./database/local/00_local_auth_compat.sql:/docker-entrypoint-initdb.d/00_local_auth_compat.sql:ro
+      - ./database/init_migration_001.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/initial_mock_data_load_fixed.sql:/docker-entrypoint-initdb.d/02_mock_data.sql:ro
+      - ./database/seed_demo_consents.sql:/docker-entrypoint-initdb.d/03_demo_consents.sql:ro
+      - ./database/rls_policies.sql:/docker-entrypoint-initdb.d/04_rls_policies.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d arogya"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+
+  backend:
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/arogya
+      AUTH_MODE: local
+      SESSION_SECRET: ${SESSION_SECRET:-arogya-link-dev-session-secret-change-me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  frontend:
+    environment:
+      AUTH_MODE: local
+      SESSION_SECRET: ${SESSION_SECRET:-arogya-link-dev-session-secret-change-me}
+    depends_on:
+      backend:
+        condition: service_healthy

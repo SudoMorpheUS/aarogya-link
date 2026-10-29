@@ -21,20 +21,26 @@ export default async function PatientsPage({
   let rows: (ApiPatient | import("@/lib/types").Patient)[] = [];
   let consentDist: any[] = [];
   let totalPatientCount: number | null = null;
-  try {
-    const [patientsData, distData, statsData] = await Promise.all([
-      api.getPatients(q, 100),
-      session.role === "admin" ? api.getConsentDistribution(200) : Promise.resolve([]),
-      api.getStats().catch(() => null),
-    ]);
-    rows = patientsData;
-    consentDist = distData;
-    if (statsData && typeof statsData.patients === "number") {
-      totalPatientCount = statsData.patients;
-    }
-  } catch (err) {
-    console.warn("Falling back to local store for patients:", err);
+  // Resolve each dataset independently: a failure in the consent distribution
+  // (or stats) must not replace the live patient list with sample data.
+  const [patientsResult, distResult, statsResult] = await Promise.allSettled([
+    api.getPatients(q, 5000),
+    session.role === "admin" ? api.getConsentDistribution(5000) : Promise.resolve([]),
+    api.getStats(),
+  ]);
+  if (patientsResult.status === "fulfilled") {
+    rows = patientsResult.value;
+  } else {
+    console.warn("Falling back to local store for patients:", patientsResult.reason);
     rows = store.listPatients(q);
+  }
+  if (distResult.status === "fulfilled") {
+    consentDist = distResult.value;
+  } else {
+    console.warn("Consent distribution unavailable:", distResult.reason);
+  }
+  if (statsResult.status === "fulfilled" && typeof statsResult.value?.patients === "number") {
+    totalPatientCount = statsResult.value.patients;
   }
   const consentMap = new Map(consentDist.map((d) => [d.patient_id, d]));
   const today = store.today();
@@ -77,7 +83,7 @@ export default async function PatientsPage({
       />
 
       <form className="search-form" role="search">
-        <input name="q" defaultValue={q} placeholder="Name, patient ID or blood group" aria-label="Search patients" type="search" />
+        <input key={q} name="q" defaultValue={q} placeholder="Name, patient ID or blood group" aria-label="Search patients" type="search" />
         <button className="btn">Search</button>
         {q ? (
           <Link className="btn btn--secondary" href={`/patients${isDoctor ? `?view=${currentView}` : ""}`}>

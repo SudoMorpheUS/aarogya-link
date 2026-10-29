@@ -25,14 +25,24 @@ export default async function HospitalDetailPage({
   let hospital: ApiHospitalCaseload | null = null;
   let doctors: ApiDoctor[] = [];
 
-  try {
-    const [caseload, docData] = await Promise.all([
-      api.getHospitalCaseload(),
-      api.getDoctors(id, 1000),
-    ]);
-    hospital = caseload.find((h) => h.hospital_id === id) || null;
-    doctors = docData.filter((d) => d.hospital_id === id);
-    if (!hospital) {
+  const [caseloadResult, doctorsResult] = await Promise.allSettled([
+    api.getHospitalCaseload(),
+    api.getDoctors(id, 5000),
+  ]);
+  if (caseloadResult.status === "fulfilled") {
+    hospital = caseloadResult.value.find((h) => h.hospital_id === id) || null;
+  } else {
+    console.warn("Falling back to local store for hospital details:", caseloadResult.reason);
+    hospital = (store.caseload().find((h: any) => h.hospital_id === id) as any) || null;
+  }
+  if (doctorsResult.status === "fulfilled") {
+    doctors = doctorsResult.value.filter((d) => d.hospital_id === id);
+  } else {
+    console.warn("Doctor roster unavailable:", doctorsResult.reason);
+    doctors = (store.listDoctors().filter((d: any) => d.hospital_id === id) as any) || [];
+  }
+  if (!hospital) {
+    try {
       const hDirect = await api.getHospital(id);
       if (hDirect) {
         hospital = {
@@ -45,11 +55,7 @@ export default async function HospitalDetailPage({
           inpatient_visits: 0,
         };
       }
-    }
-  } catch (err) {
-    console.warn("Falling back to local store for hospital details:", err);
-    hospital = (store.caseload().find((h: any) => h.hospital_id === id) as any) || null;
-    doctors = (store.listDoctors().filter((d: any) => d.hospital_id === id) as any) || [];
+    } catch {}
   }
 
   if (!hospital) {

@@ -32,7 +32,7 @@ def _patient_dict(p: Patient) -> dict[str, Any]:
 @router.get("")
 def list_patients(
     q: str = Query(default="", description="Search query by name, ID, or email"),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=5000),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """Search and list patients."""

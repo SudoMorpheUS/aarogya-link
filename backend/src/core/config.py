@@ -26,6 +26,10 @@ def _as_bool(value: str | None) -> bool:
 
 DEBUG: bool = _as_bool(os.getenv("DEBUG", "false"))
 
+# ``supabase`` keeps the hosted Supabase Auth flow; ``local`` stores password
+# hashes in the local PostgreSQL database (see database/local/).
+AUTH_MODE: str = os.getenv("AUTH_MODE", "supabase").strip().lower()
+
 DATABASE_URL: str = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg://aarogya:aarogya_dev_password@localhost:5432/aarogya_db",

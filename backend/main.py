@@ -3,9 +3,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from src.core.config import DEBUG
+from src.core.config import AUTH_MODE, DEBUG
 from src.core.database import SessionLocal
 from src.core.identity import ensure_admin_table
+from src.core.local_auth import ensure_local_auth
 from src.routers.audit import router as audit_router
 from src.routers.auth import router as auth_router
 from src.routers.consents import router as consents_router
@@ -23,6 +24,11 @@ async def lifespan(app: FastAPI):
         ensure_admin_table()
     except Exception as e:
         print(f"Warning: failed to prepare admin_user table: {e}")
+    if AUTH_MODE == "local":
+        try:
+            ensure_local_auth()
+        except Exception as e:
+            print(f"Warning: failed to prepare local auth_user table: {e}")
     # Startup: Ensure all PostgreSQL SERIAL sequences are synced to MAX(id) + 1
     try:
         with SessionLocal() as db:

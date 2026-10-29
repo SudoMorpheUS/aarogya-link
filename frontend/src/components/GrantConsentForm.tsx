@@ -86,6 +86,7 @@ export function GrantConsentForm({
   const handleClear = () => {
     setSelected(null);
     setSearchQuery("");
+    setFilterType("all");
     setIsOpen(true);
     setTimeout(() => searchInputRef.current?.focus(), 50);
   };
@@ -212,7 +213,7 @@ export function GrantConsentForm({
                   aria-expanded={isOpen}
                   aria-controls={listboxId}
                   aria-labelledby="target-label"
-                  placeholder="Search 50 hospitals or 300 doctors by name, specialty, or city…"
+                  placeholder={`Search ${hospitals.length} hospitals or ${doctors.length} doctors by name, specialty, or city…`}
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
@@ -232,6 +233,7 @@ export function GrantConsentForm({
                     type="button"
                     onClick={() => {
                       setSearchQuery("");
+                      setFilterType("all");
                       searchInputRef.current?.focus();
                     }}
                     style={{

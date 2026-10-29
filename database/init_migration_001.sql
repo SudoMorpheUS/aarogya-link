@@ -1,3 +1,10 @@
+CREATE TABLE admin_user (
+  email      VARCHAR(100) PRIMARY KEY,
+  full_name  VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT NOW()
+);
+
+
 CREATE TABLE patient (
   patient_id     VARCHAR(20)  PRIMARY KEY,
   full_name      VARCHAR(100) NOT NULL,
@@ -171,3 +178,10 @@ JOIN visit v2 ON lt2.visit_id = v2.visit_id AND v1.patient_id = v2.patient_id
 WHERE v1.hospital_id <> v2.hospital_id
   AND lt2.test_date >= lt1.test_date
   AND lt2.test_date - lt1.test_date <= 90;
+
+-- ============================================================================
+-- Row Level Security is NOT enabled by this schema script.
+-- Run database/rls_policies.sql immediately afterwards (Supabase SQL Editor or
+-- psql -v ON_ERROR_STOP=1 -f database/rls_policies.sql) to enable and force RLS
+-- on every table. Use database/check_rls.sql to audit the result.
+-- ============================================================================

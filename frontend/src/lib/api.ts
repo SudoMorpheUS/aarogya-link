@@ -255,7 +255,7 @@ export const api = {
     apiRequest<any>(`/api/doctors/${id}`, { method: "DELETE" }),
 
   // Patients
-  getPatients: (query = "", limit = 100) =>
+  getPatients: (query = "", limit = 500) =>
     apiRequest<ApiPatient[]>(`/api/patients?q=${encodeURIComponent(query)}&limit=${limit}`),
   getPatient: (id: string) => apiRequest<ApiPatient>(`/api/patients/${id}`),
   registerPatient: (data: Partial<ApiPatient>) =>
@@ -294,7 +294,7 @@ export const api = {
     params.append("limit", String(limit));
     return apiRequest<ApiConsent[]>(`/api/consents?${params.toString()}`);
   },
-  getConsentDistribution: (limit = 100) =>
+  getConsentDistribution: (limit = 500) =>
     apiRequest<ApiConsentDistribution[]>(`/api/consents/distribution?limit=${limit}`),
   grantConsent: (data: {
     patient_id: string;
@@ -344,6 +344,21 @@ export const api = {
   lookupUser: (email: string) =>
     apiRequest<{ role: "patient" | "doctor" | "admin" | null; id: string | null; name: string; email: string; found?: boolean }>(
       `/api/auth/lookup?email=${encodeURIComponent(email)}`
+    ),
+  localLogin: (email: string, password: string) =>
+    apiRequest<{ role: "patient" | "doctor" | "admin"; id: string | null; name: string; email: string; found: boolean }>(
+      "/api/auth/local/login",
+      { method: "POST", body: JSON.stringify({ email, password }) },
+    ),
+  setLocalPassword: (data: {
+    email: string;
+    password: string;
+    role: "patient" | "doctor" | "admin";
+    id: string | null;
+  }) =>
+    apiRequest<{ status: string; email: string; role: string }>(
+      "/api/auth/local/password",
+      { method: "POST", body: JSON.stringify(data) },
     ),
   registerAdmin: (email: string, name: string) =>
     apiRequest<any>("/api/auth/register-admin", {

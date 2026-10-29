@@ -479,3 +479,48 @@ When an administrator registers a patient:
    - **Default Initial Password**: `ArogyaLink@2026` (or `ArogyaLink@123`). The system automatically creates their Firebase account on their first login with this password.
    - **Custom Password**: The patient can also click the **"Create Account"** tab at any time, enter their email, and set their own personal password. Because their email is already in the database, AarogyaLink immediately connects them to their existing medical history and patient ID (`PAT-IN-xxxx`).
 
+---
+
+## 6. Row Level Security (Supabase)
+
+`database/init_migration_001.sql` creates the schema. RLS is installed separately by
+`database/rls_policies.sql`, which is safe to re-run. It enables **and forces** RLS on
+every public table, recreates the helper functions as `SECURITY DEFINER`, and adds:
+
+- patient self-access and self-management of consent;
+- doctor access to patients/visits/diagnosis/prescription/lab-test data only when an
+  active consent names the doctor **or their hospital**;
+- hospital-wide consent visibility for doctors;
+- admin full access, service-role bypass policies, and no `anon` table access;
+- append-only audit rows for normal users;
+- a safe `v_doctor_directory` view for doctor name/specialty lookups without exposing
+  doctor email or contact details.
+
+### Local authentication mode
+
+When the stack runs entirely in Docker (`docker-compose.local.yml`), `AUTH_MODE=local`
+uses the same PostgreSQL instance for authentication:
+
+- `database/local/00_local_auth_compat.sql` creates the Supabase-style roles
+  (`anon`, `authenticated`, `service_role`), the `auth.jwt()` helper schema, and the
+  `public.auth_user` table.
+- Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes, never plaintext.
+- FastAPI exposes `POST /api/auth/local/login` and `POST /api/auth/local/password`;
+  Next.js stores an HMAC-signed, httpOnly session cookie.
+- Demo accounts are seeded by the backend on first start with password
+  `AarogyaLink@123`; other seeded profiles can claim a password from the
+  **Create Account** tab without changing their existing role or records.
+
+Audit the live project with `database/check_rls.sql`. The strict check for tables that
+still have RLS disabled is:
+
+```sql
+SELECT n.nspname AS schema_name, c.relname AS table_name
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relkind IN ('r', 'p')
+  AND c.relrowsecurity = false
+ORDER BY n.nspname, c.relname;
+```
+

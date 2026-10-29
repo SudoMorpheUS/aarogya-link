@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const hospital = url.searchParams.get("hospital_id") || undefined;
   const q = url.searchParams.get("q") || undefined;
   try {
-    const doctors = await api.getDoctors(hospital, 1000, q);
+    const doctors = await api.getDoctors(hospital, 5000, q);
     return Response.json({ doctors, source: "PostgreSQL 17 (via FastAPI)" });
   } catch {
     let rows = listDoctors().filter((d) => !hospital || d.hospital_id === hospital);

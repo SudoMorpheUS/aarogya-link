@@ -11,6 +11,8 @@ services:
       BACKEND_API_URL: http://backend:8000
       NEXT_PUBLIC_SUPABASE_URL: https://izgtbzxrruajihrbxzyx.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_K0QhQQfypHet-L8BQOV44Q_D_UvI51j
+      AUTH_MODE: supabase
+      SESSION_SECRET: ${SESSION_SECRET:-arogya-link-dev-session-secret-change-me}
       TZ: "Asia/Kolkata"
     depends_on:
       backend:
@@ -27,7 +29,9 @@ services:
     volumes:
       - ./backend:/app
     environment:
-      DATABASE_URL: postgresql+psycopg://postgres:RFXsx2YSQQ%25_m.m@db.izgtbzxrruajihrbxzyx.supabase.co:5432/postgres
+      DATABASE_URL: postgresql+psycopg://postgres.izgtbzxrruajihrbxzyx:RFXsx2YSQQ%25_m.m@aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres
+      AUTH_MODE: supabase
       PYTHONUNBUFFERED: "1"
       TZ: "Asia/Kolkata"
     restart: unless-stopped
+

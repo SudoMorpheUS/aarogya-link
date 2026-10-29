@@ -3,15 +3,14 @@
 import { useEffect, useState } from "react";
 import { Eye, EyeOff, LogIn, UserPlus, Shield, Stethoscope, UserCheck, Sparkles, CheckCircle2 } from "lucide-react";
 import {
-  supabase,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  getFriendlySupabaseErrorMessage,
 } from "@/lib/supabase";
 import type { Hospital, Role } from "@/lib/types";
 
 interface AuthCardProps {
   hospitals: Hospital[];
+  authMode: "local" | "supabase";
 }
 
 const DEMO_PASSWORD = "AarogyaLink@123";
@@ -67,7 +66,7 @@ const DEMO_PERSONAS = [
   },
 ];
 
-export function AuthCard({ hospitals }: AuthCardProps) {
+export function AuthCard({ hospitals, authMode }: AuthCardProps) {
   const [mode, setMode] = useState<"signin" | "register">("signin");
   const [loading, setLoading] = useState(false);
   const [activePersonaEmail, setActivePersonaEmail] = useState<string | null>(null);
@@ -101,19 +100,22 @@ export function AuthCard({ hospitals }: AuthCardProps) {
     setSuccess(`Signing in as ${persona.label}...`);
 
     try {
-      // 1. Try Supabase Authentication
-      try {
-        await signInWithEmailAndPassword(persona.email, DEMO_PASSWORD);
-      } catch (authErr: any) {
+      // 1. In Supabase mode, establish the Supabase Auth session first. In local
+      //    mode the password is verified by FastAPI against auth_user.
+      if (authMode === "supabase") {
         try {
-          await createUserWithEmailAndPassword(persona.email, DEMO_PASSWORD, {
-            full_name: persona.label,
-            role: persona.role,
-          });
-        } catch {}
+          await signInWithEmailAndPassword(persona.email, DEMO_PASSWORD);
+        } catch {
+          try {
+            await createUserWithEmailAndPassword(persona.email, DEMO_PASSWORD, {
+              full_name: persona.label,
+              role: persona.role,
+            });
+          } catch {}
+        }
       }
 
-      // 2. Establish server session
+      // 2. Establish the application session (signed httpOnly cookie).
       const resp = await fetch("/api/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -121,6 +123,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
           email: persona.email,
           role: persona.role,
           displayName: persona.label,
+          password: authMode === "local" ? DEMO_PASSWORD : undefined,
         }),
       });
 
@@ -153,23 +156,25 @@ export function AuthCard({ hospitals }: AuthCardProps) {
       let userEmail = email.trim().toLowerCase();
       let displayName: string | null = null;
 
-      try {
-        const { user } = await signInWithEmailAndPassword(userEmail, password);
-        userEmail = user?.email || userEmail;
-        displayName = user?.user_metadata?.full_name || null;
-      } catch (authErr: any) {
-        // If it's one of the demo passwords, auto-create in Supabase if needed
-        const isDefaultPassword = password === DEMO_PASSWORD || password === "ArogyaLink@2026";
-        if (isDefaultPassword) {
-          try {
-            const { user } = await createUserWithEmailAndPassword(userEmail, password, {
-              full_name: userEmail.split("@")[0],
-            });
-            userEmail = user?.email || userEmail;
-            displayName = user?.user_metadata?.full_name || null;
-          } catch {}
-        } else {
-          throw authErr;
+      if (authMode === "supabase") {
+        try {
+          const { user } = await signInWithEmailAndPassword(userEmail, password);
+          userEmail = user?.email || userEmail;
+          displayName = user?.user_metadata?.full_name || null;
+        } catch (authErr: any) {
+          // If it's one of the demo passwords, auto-create in Supabase if needed
+          const isDefaultPassword = password === DEMO_PASSWORD || password === "ArogyaLink@2026";
+          if (isDefaultPassword) {
+            try {
+              const { user } = await createUserWithEmailAndPassword(userEmail, password, {
+                full_name: userEmail.split("@")[0],
+              });
+              userEmail = user?.email || userEmail;
+              displayName = user?.user_metadata?.full_name || null;
+            } catch {}
+          } else {
+            throw authErr;
+          }
         }
       }
 
@@ -187,6 +192,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
           email: userEmail,
           displayName,
           preferredRole: savedRole || undefined,
+          password: authMode === "local" ? password : undefined,
         }),
       });
 
@@ -243,29 +249,53 @@ export function AuthCard({ hospitals }: AuthCardProps) {
         throw new Error(check.error || "Could not verify this email. Please try again.");
       }
       if (check.exists) {
+        // Local mode: a profile created by staff (or seeded) can claim a
+        // password on first use. An account that already has a password is
+        // rejected by the backend, so this cannot reset someone else's login.
+        if (authMode === "local" && check.role === role) {
+          const claim = await fetch("/api/auth/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanEmail,
+              password,
+              role,
+              displayName: fullName.trim(),
+              isClaim: true,
+            }),
+          }).then((r) => r.json());
+          if (!claim.success) {
+            throw new Error(claim.error || "Could not claim this account. Please sign in instead.");
+          }
+          setSuccess("Existing profile claimed. Redirecting to dashboard...");
+          window.location.href = "/dashboard";
+          return;
+        }
         throw new Error(`This email is already registered under the ${check.role} role. Please sign in instead.`);
       }
 
-      try {
-        await createUserWithEmailAndPassword(cleanEmail, password, {
-          full_name: fullName.trim(),
-          role,
-          date_of_birth: role === "patient" ? dateOfBirth : undefined,
-          gender: role === "patient" ? gender : undefined,
-          bloodGroup: role === "patient" ? bloodGroup : undefined,
-          contactNumber: role === "patient" ? contactNumber : undefined,
-          hospitalId: role === "doctor" ? hospitalId : undefined,
-          specialization: role === "doctor" ? specialization : undefined,
-          licenseNumber: role === "doctor" ? licenseNumber : undefined,
-        });
-      } catch (createErr: any) {
-        if (!createErr.message?.includes("already exists") && !createErr.message?.includes("already registered")) {
-          throw createErr;
-        }
+      if (authMode === "supabase") {
         try {
-          await signInWithEmailAndPassword(cleanEmail, password);
-        } catch {
-          throw createErr;
+          await createUserWithEmailAndPassword(cleanEmail, password, {
+            full_name: fullName.trim(),
+            role,
+            date_of_birth: role === "patient" ? dateOfBirth : undefined,
+            gender: role === "patient" ? gender : undefined,
+            bloodGroup: role === "patient" ? bloodGroup : undefined,
+            contactNumber: role === "patient" ? contactNumber : undefined,
+            hospitalId: role === "doctor" ? hospitalId : undefined,
+            specialization: role === "doctor" ? specialization : undefined,
+            licenseNumber: role === "doctor" ? licenseNumber : undefined,
+          });
+        } catch (createErr: any) {
+          if (!createErr.message?.includes("already exists") && !createErr.message?.includes("already registered")) {
+            throw createErr;
+          }
+          try {
+            await signInWithEmailAndPassword(cleanEmail, password);
+          } catch {
+            throw createErr;
+          }
         }
       }
 
@@ -282,6 +312,7 @@ export function AuthCard({ hospitals }: AuthCardProps) {
           displayName: fullName.trim(),
           role,
           isRegistration: true,
+          password: authMode === "local" ? password : undefined,
           dateOfBirth: role === "patient" ? dateOfBirth : undefined,
           gender: role === "patient" ? gender : undefined,
           bloodGroup: role === "patient" ? bloodGroup : undefined,
@@ -357,7 +388,9 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             <div>
               <h2 style={{ fontSize: "var(--fs-lg)", marginBottom: 4 }}>Sign in with Email</h2>
               <p className="muted" style={{ fontSize: "var(--fs-sm)" }}>
-                Access unified health records, consents, and hospital portals with Supabase.
+                {authMode === "local"
+                  ? "Access unified health records, consents, and hospital portals with local PostgreSQL authentication."
+                  : "Access unified health records, consents, and hospital portals with Supabase."}
               </p>
             </div>
 
@@ -400,7 +433,11 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             </div>
 
             <button type="submit" className="btn" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
-              {loading && !activePersonaEmail ? "Authenticating with Supabase..." : "Sign in to AarogyaLink"}
+              {loading && !activePersonaEmail
+                ? authMode === "local"
+                  ? "Authenticating with local PostgreSQL..."
+                  : "Authenticating with Supabase..."
+                : "Sign in to AarogyaLink"}
             </button>
 
             <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--line)" }}>
@@ -476,7 +513,8 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             <div>
               <h2 style={{ fontSize: "var(--fs-lg)", marginBottom: 4 }}>Create AarogyaLink Account</h2>
               <p className="muted" style={{ fontSize: "var(--fs-sm)" }}>
-                Register with email and password, powered by Supabase Authentication.
+                Register with email and password, powered by{" "}
+                {authMode === "local" ? "the local PostgreSQL database" : "Supabase Authentication"}.
               </p>
             </div>
 
@@ -688,7 +726,11 @@ export function AuthCard({ hospitals }: AuthCardProps) {
             ) : null}
 
             <button type="submit" className="btn" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
-              {loading ? "Creating Supabase account..." : "Register & Sign in"}
+              {loading
+                ? authMode === "local"
+                  ? "Creating local account..."
+                  : "Creating Supabase account..."
+                : "Register & Sign in"}
             </button>
           </form>
         )}

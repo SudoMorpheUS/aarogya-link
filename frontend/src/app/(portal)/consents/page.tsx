@@ -53,19 +53,29 @@ export default async function ConsentsPage() {
   let hospitalsList: any[] = [];
   let doctorsList: any[] = [];
 
-  try {
-    const [consentsData, hospData, docData] = await Promise.all([
-      api.getConsents(session.id!),
-      api.getHospitals(),
-      api.getDoctors(undefined, 1000),
-    ]);
-    rows = consentsData;
-    hospitalsList = hospData;
-    doctorsList = docData;
-  } catch (err) {
-    console.warn("Falling back to local store for consents:", err);
+  // Resolve each dataset independently: one failed endpoint must not replace
+  // the full hospital/doctor directory with the tiny in-memory sample data.
+  const [consentsResult, hospitalsResult, doctorsResult] = await Promise.allSettled([
+    api.getConsents(session.id!, undefined, undefined, 5000),
+    api.getHospitals(),
+    api.getDoctors(undefined, 5000),
+  ]);
+  if (consentsResult.status === "fulfilled") {
+    rows = consentsResult.value;
+  } else {
+    console.warn("Falling back to local store for consents:", consentsResult.reason);
     rows = store.consentsOf(session.id!);
+  }
+  if (hospitalsResult.status === "fulfilled") {
+    hospitalsList = hospitalsResult.value;
+  } else {
+    console.warn("Hospital directory unavailable:", hospitalsResult.reason);
     hospitalsList = store.listHospitals() as any[];
+  }
+  if (doctorsResult.status === "fulfilled") {
+    doctorsList = doctorsResult.value;
+  } else {
+    console.warn("Doctor directory unavailable:", doctorsResult.reason);
     doctorsList = store.listDoctors() as any[];
   }
 
