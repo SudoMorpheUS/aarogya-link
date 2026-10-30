@@ -1,6 +1,6 @@
 # AarogyaLink (आरोग्यLink)
 
-> **Federated, Consent-Driven Multi-Hospital Health Data Sharing Platform**  
+> **Consent-Driven Multi-Hospital Health Data Sharing Platform**  
 > *Database Management Systems (DBMS) — Digital Assignment 02*
 
 ---
@@ -14,7 +14,7 @@
 * ABDM and HL7/FHIR standards exist, but national hospital adoption remains incomplete.
 
 ### The Solution: AarogyaLink
-AarogyaLink provides a unified, federated digital health data exchange built on a clean, centralized **PostgreSQL 17** relational architecture (BCNF) without blockchain overhead:
+AarogyaLink provides a unified digital health data exchange built on a clean, centralized **PostgreSQL 17** relational architecture (BCNF) without blockchain overhead:
 
 1. **One Global Profile:** Every patient receives a unique national identifier (e.g., `PAT-IN-1001` / `PAT100001`). All clinical encounters across affiliated hospitals consolidate into one longitudinal record.
 2. **Consent-First Dynamic Authorization:** Patients have sole ownership of their records. They grant or revoke time-bound access at the facility level (hospital-wide) or doctor-specific level via stored database functions (`fn_has_consent`).

@@ -163,21 +163,6 @@ export default async function AuditPage({
                 <h2 id="patient-audit-insights" style={{ margin: 0, fontSize: "var(--fs-lg)" }}>
                   Patient Access Intelligence
                 </h2>
-                <span
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: "2px 8px",
-                    borderRadius: "4px",
-                    fontSize: "var(--fs-xs)",
-                    fontWeight: 600,
-                    background: "rgba(59, 130, 246, 0.15)",
-                    color: "var(--blue-400)",
-                    border: "1px solid rgba(59, 130, 246, 0.3)",
-                  }}
-                >
-                  B-Tree Index Active
-                </span>
               </div>
               <p className="muted" style={{ margin: "4px 0 0", fontSize: "var(--fs-xs)" }}>
                 Patient: <strong>{patientInfo?.full_name || targetPatientId}</strong> · ID:{" "}
@@ -279,20 +264,6 @@ export default async function AuditPage({
                 </div>
               )}
             </div>
-          </div>
-
-          <div
-            style={{
-              padding: "10px 14px",
-              background: "var(--bg-subtle)",
-              border: "1px dashed var(--border)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "var(--fs-xs)",
-              color: "var(--text-muted)",
-              lineHeight: 1.5,
-            }}
-          >
-            ⚡ <strong>Index optimization (<code>idx_audit_patient_time</code>)</strong>: The index groups entries by patient and orders their timestamps from newest to oldest, which can reduce the work needed to retrieve the latest entries.
           </div>
         </section>
       )}

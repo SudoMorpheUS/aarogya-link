@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AarogyaLink API",
-    description="Federated, Consent-Driven Multi-Hospital Health Data Sharing API",
+    description="Consent-Driven Multi-Hospital Health Data Sharing API",
     version="1.0.0",
     lifespan=lifespan,
 )
