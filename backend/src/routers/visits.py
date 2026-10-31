@@ -2,40 +2,39 @@ from __future__ import annotations
 
 import datetime
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..core.access import actor_from, assert_may_treat, open_chart, require_roles
 from ..core.database import get_db
 from ..models.doctor import Doctor
-from ..models.patient import Patient
 from ..models.visit import Diagnosis, LabTest, Prescription, Visit
 
 router = APIRouter(prefix="/api/visits", tags=["visits"])
 
 
 @router.post("", status_code=201)
-def create_visit(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Record a clinical encounter with diagnoses, prescriptions, and lab tests."""
+def create_visit(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Record a clinical encounter for the signed-in doctor, at that doctor's hospital."""
+    actor = actor_from(request)
+    require_roles(actor, "doctor")
     patient_id = payload.get("patient_id")
-    doctor_id = payload.get("doctor_id")
     visit_type = payload.get("visit_type", "OPD")
     chief_complaint = payload.get("chief_complaint") or None
 
-    if not patient_id or not doctor_id:
-        raise HTTPException(status_code=400, detail="patient_id and doctor_id are required")
+    if not patient_id:
+        raise HTTPException(status_code=400, detail="patient_id is required")
     if visit_type not in ("OPD", "Emergency", "Inpatient"):
         raise HTTPException(status_code=400, detail="visit_type must be OPD, Emergency or Inpatient")
 
-    patient = db.scalar(select(Patient).where(Patient.patient_id == patient_id))
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
+    assert_may_treat(db, actor, patient_id)
+    doctor_id = actor.id
     doctor = db.scalar(select(Doctor).where(Doctor.doctor_id == doctor_id))
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    hospital_id = payload.get("hospital_id") or doctor.hospital_id
+    hospital_id = doctor.hospital_id
 
     # 1. Create Visit record (fires PostgreSQL trigger `tr_visit_audit`)
     visit = Visit(
@@ -117,12 +116,23 @@ def create_visit(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict
 
 @router.get("")
 def list_visits(
+    request: Request,
     patient_id: str | None = None,
     doctor_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """List recent visits."""
+    """List recent visits the caller is allowed to see."""
+    actor = actor_from(request)
+    if actor.role == "patient":
+        patient_id = actor.id
+    elif actor.role == "doctor":
+        if patient_id:
+            open_chart(db, actor, patient_id)
+        else:
+            doctor_id = actor.id
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="This action is not available for your role")
     stmt = select(Visit).order_by(Visit.visit_date.desc())
     if patient_id:
         stmt = stmt.where(Visit.patient_id == patient_id)
@@ -146,8 +156,9 @@ def list_visits(
 
 
 @router.delete("/{visit_id}")
-def delete_visit(visit_id: int, db: Session = Depends(get_db)):
-    """Delete a clinical visit encounter and associated records (Delete operation)."""
+def delete_visit(visit_id: int, request: Request, db: Session = Depends(get_db)):
+    """Delete a clinical visit. Only an administrator may do this."""
+    require_roles(actor_from(request), "admin")
     v = db.scalar(select(Visit).where(Visit.visit_id == visit_id))
     if not v:
         raise HTTPException(status_code=404, detail="Visit not found")

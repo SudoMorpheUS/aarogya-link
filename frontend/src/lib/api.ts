@@ -1,10 +1,12 @@
 /**
  * AarogyaLink — FastAPI Backend Client
- * 
- * Provides strongly-typed HTTP calls from Next.js (Option B) to the FastAPI backend service.
- * In Docker: connects via http://backend:8000
- * Locally: connects via http://localhost:8000
+ *
+ * Server-side calls forward the signed al_session cookie. Registration calls
+ * that run before the cookie exists pass the Supabase access token instead.
+ * In Docker the server reaches the API at http://backend:8000.
  */
+
+import { cookies } from "next/headers";
 
 const getBackendUrl = (): string => {
   if (process.env.BACKEND_API_URL) return process.env.BACKEND_API_URL;
@@ -16,16 +18,44 @@ const getBackendUrl = (): string => {
   return "http://localhost:8000";
 };
 
+function headerRecord(headers: HeadersInit | undefined): Record<string, string> {
+  if (!headers) return {};
+  if (headers instanceof Headers) {
+    const out: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(headers)) return Object.fromEntries(headers);
+  return { ...headers };
+}
+
+function bearer(accessToken?: string): Record<string, string> {
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+}
+
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {},
 ): Promise<T> {
   const base = getBackendUrl();
   const url = `${base}${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
-  const headers = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  };
+  const headers = headerRecord(options.headers);
+  if (!headers["Content-Type"] && !headers["content-type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+  const hasAuth = Boolean(
+    headers.Authorization || headers.authorization || headers["X-Aarogya-Session"] || headers["x-aarogya-session"],
+  );
+  if (!hasAuth) {
+    try {
+      const raw = (await cookies()).get("al_session")?.value;
+      if (raw) headers["X-Aarogya-Session"] = raw;
+    } catch {
+      // Outside a request there is no cookie to forward.
+    }
+  }
 
   const res = await fetch(url, {
     ...options,
@@ -147,6 +177,46 @@ export interface ApiHospitalPatient {
   last_visit: string | null;
 }
 
+export interface ApiChart {
+  patient: ApiPatient;
+  timeline: ApiTimelineEntry[];
+  labs: {
+    lab_test_id: number;
+    visit_id: number;
+    test_name: string;
+    result: string | null;
+    unit: string | null;
+    test_date: string;
+    hospital_name: string;
+    hospital_id: string;
+  }[];
+  prescriptions: {
+    prescription_id: number;
+    visit_id: number;
+    medicine_name: string;
+    dosage: string;
+    frequency: string;
+    duration: string;
+    visit_date: string;
+    doctor_name: string;
+    hospital_name: string;
+    days_left?: number | null;
+  }[];
+  consents: {
+    consent_id: number;
+    patient_id: string;
+    hospital_id: string | null;
+    hospital_name: string | null;
+    doctor_id: string | null;
+    doctor_name: string | null;
+    start_date: string;
+    end_date: string | null;
+    status: "Active" | "Revoked" | string;
+  }[];
+  access_events: number;
+  access: "self" | "admin" | "consent" | "emergency";
+}
+
 export interface ApiTimelineEntry {
   visit_id: number;
   visit_date: string;
@@ -247,8 +317,8 @@ export const api = {
   getDoctor: (id: string) => apiRequest<ApiDoctor>(`/api/doctors/${id}`),
   getAccessiblePatients: (doctorId: string) =>
     apiRequest<string[]>(`/api/doctors/${doctorId}/accessible-patients`),
-  createDoctor: (data: Partial<ApiDoctor>) =>
-    apiRequest<ApiDoctor>("/api/doctors", { method: "POST", body: JSON.stringify(data) }),
+  createDoctor: (data: Partial<ApiDoctor>, accessToken?: string) =>
+    apiRequest<ApiDoctor>("/api/doctors", { method: "POST", body: JSON.stringify(data), headers: bearer(accessToken) }),
   updateDoctor: (id: string, data: Partial<ApiDoctor>) =>
     apiRequest<ApiDoctor>(`/api/doctors/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteDoctor: (id: string) =>
@@ -258,12 +328,13 @@ export const api = {
   getPatients: (query = "", limit = 500) =>
     apiRequest<ApiPatient[]>(`/api/patients?q=${encodeURIComponent(query)}&limit=${limit}`),
   getPatient: (id: string) => apiRequest<ApiPatient>(`/api/patients/${id}`),
-  registerPatient: (data: Partial<ApiPatient>) =>
-    apiRequest<ApiPatient>("/api/patients", { method: "POST", body: JSON.stringify(data) }),
+  registerPatient: (data: Partial<ApiPatient>, accessToken?: string) =>
+    apiRequest<ApiPatient>("/api/patients", { method: "POST", body: JSON.stringify(data), headers: bearer(accessToken) }),
   updatePatient: (id: string, data: Partial<ApiPatient>) =>
     apiRequest<ApiPatient>(`/api/patients/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deletePatient: (id: string) =>
     apiRequest<any>(`/api/patients/${id}`, { method: "DELETE" }),
+  getChart: (patientId: string) => apiRequest<ApiChart>(`/api/patients/${patientId}/chart`),
   getTimeline: (patientId: string) =>
     apiRequest<ApiTimelineEntry[]>(`/api/patients/${patientId}/timeline`),
   getActivePrescriptions: (patientId: string) =>
@@ -341,28 +412,15 @@ export const api = {
     apiRequest<ApiDuplicateLab[]>(`/api/duplicates?limit=${limit}`),
 
   // Auth & Admin
-  lookupUser: (email: string) =>
+  lookupUser: (email: string, accessToken?: string) =>
     apiRequest<{ role: "patient" | "doctor" | "admin" | null; id: string | null; name: string; email: string; found?: boolean }>(
-      `/api/auth/lookup?email=${encodeURIComponent(email)}`
+      `/api/auth/lookup?email=${encodeURIComponent(email)}`,
+      { headers: bearer(accessToken) },
     ),
-  localLogin: (email: string, password: string) =>
-    apiRequest<{ role: "patient" | "doctor" | "admin"; id: string | null; name: string; email: string; found: boolean }>(
-      "/api/auth/local/login",
-      { method: "POST", body: JSON.stringify({ email, password }) },
-    ),
-  setLocalPassword: (data: {
-    email: string;
-    password: string;
-    role: "patient" | "doctor" | "admin";
-    id: string | null;
-  }) =>
-    apiRequest<{ status: string; email: string; role: string }>(
-      "/api/auth/local/password",
-      { method: "POST", body: JSON.stringify(data) },
-    ),
-  registerAdmin: (email: string, name: string) =>
+  registerAdmin: (email: string, name: string, accessToken?: string) =>
     apiRequest<any>("/api/auth/register-admin", {
       method: "POST",
       body: JSON.stringify({ email, name }),
+      headers: bearer(accessToken),
     }),
 };

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import random
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from ..core.access import actor_from, require_roles, same_email
 from ..core.database import get_db
 from ..core.identity import clean_email, find_account
 from ..models.doctor import Doctor
@@ -23,8 +24,13 @@ def _normalize_hospital_id(hospital_id: str) -> str:
 
 
 @router.get("/{doctor_id}/accessible-patients")
-def get_accessible_patients(doctor_id: str, db: Session = Depends(get_db)) -> list[str]:
-    """Return list of patient_ids that this doctor has active consent to access (directly or via hospital)."""
+def get_accessible_patients(doctor_id: str, request: Request, db: Session = Depends(get_db)) -> list[str]:
+    """Return patient ids this doctor has active consent to access."""
+    actor = actor_from(request)
+    if actor.role == "doctor" and doctor_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only list your own consented patients")
+    if actor.role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="This action is not available for your role")
     sql = text("""
         SELECT DISTINCT c.patient_id
         FROM consent c
@@ -108,8 +114,18 @@ def get_doctor(doctor_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
 
 
 @router.post("", response_model=DoctorRead, status_code=201)
-def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db)):
-    """Register a new doctor. Writes only to ``doctor`` and never to another role's table."""
+def create_doctor(payload: DoctorCreate, request: Request, db: Session = Depends(get_db)):
+    """Register a new doctor. Writes only to ``doctor`` and never to another role's table.
+
+    A new Supabase user may create only the doctor row for their own email.
+    An administrator may register any doctor.
+    """
+    actor = actor_from(request)
+    clean_for_actor = clean_email(payload.email)
+    if actor.role is None:
+        same_email(actor, clean_for_actor)
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="You cannot register a doctor")
     hosp_id = _normalize_hospital_id(payload.hospital_id)
     if not db.scalar(select(Hospital).where(Hospital.hospital_id == hosp_id)):
         raise HTTPException(status_code=400, detail=f"Hospital '{payload.hospital_id}' does not exist")
@@ -161,8 +177,13 @@ def create_doctor(payload: DoctorCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{doctor_id}", response_model=DoctorRead)
-def update_doctor(doctor_id: str, payload: dict[str, Any], db: Session = Depends(get_db)):
-    """Update doctor profile details in PostgreSQL (Update operation)."""
+def update_doctor(doctor_id: str, payload: dict[str, Any], request: Request, db: Session = Depends(get_db)):
+    """Update a doctor profile. A doctor may update their own row; an administrator may update any."""
+    actor = actor_from(request)
+    if actor.role == "doctor" and actor.id != doctor_id:
+        raise HTTPException(status_code=403, detail="You can only update your own profile")
+    if actor.role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="You cannot update this profile")
     doc = db.scalar(select(Doctor).where(Doctor.doctor_id == doctor_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")
@@ -196,8 +217,9 @@ def update_doctor(doctor_id: str, payload: dict[str, Any], db: Session = Depends
 
 
 @router.delete("/{doctor_id}")
-def delete_doctor(doctor_id: str, db: Session = Depends(get_db)):
-    """Delete doctor record from PostgreSQL (Delete operation)."""
+def delete_doctor(doctor_id: str, request: Request, db: Session = Depends(get_db)):
+    """Delete a doctor record. Only an administrator may do this."""
+    require_roles(actor_from(request), "admin")
     doc = db.scalar(select(Doctor).where(Doctor.doctor_id == doctor_id))
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")

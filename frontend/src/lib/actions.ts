@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { clearSession, requireSession, setSession } from "./session";
 import * as store from "./store";
-import { api, apiErrorMessage } from "./api";
+import { api, apiErrorMessage, apiErrorStatus } from "./api";
 
 export interface FormState {
   error?: string;
@@ -95,12 +95,12 @@ export async function breakGlassAction(formData: FormData): Promise<void> {
   try {
     await api.recordBreakGlass(patientId, session.id!, reason);
   } catch (err) {
-    console.warn("FastAPI breakGlass error:", err);
+    redirect(`/patients/${patientId}?error=${encodeURIComponent(apiErrorMessage(err))}`);
   }
   try {
     store.breakGlass(patientId, session.id!, reason);
-  } catch (e) {
-    redirect(`/patients/${patientId}?error=${encodeURIComponent((e as Error).message)}`);
+  } catch {
+    // The database row is the record that opens the chart.
   }
   redirect(`/patients/${patientId}`);
 }
@@ -155,6 +155,10 @@ export async function recordVisitAction(_prev: FormState, formData: FormData): P
       });
       apiSuccess = true;
     } catch (apiErr) {
+      const status = apiErrorStatus(apiErr);
+      if (status === 401 || status === 403 || status === 409) {
+        return { error: apiErrorMessage(apiErr) };
+      }
       console.warn("FastAPI createVisit error:", apiErr);
     }
 

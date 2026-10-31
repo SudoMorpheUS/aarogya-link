@@ -818,17 +818,15 @@ Use an `.env.example` file with placeholders only. Names may be adapted
 to the current Compose file.
 
 ``` dotenv
-POSTGRES_DB=aarogya_db
-POSTGRES_USER=aarogya
-POSTGRES_PASSWORD=replace_for_local_development
-DATABASE_URL=postgresql://aarogya:replace_for_local_development@db:5432/aarogya_db
+DATABASE_URL=postgresql+psycopg://<supabase-user>:<password>@<pooler-host>:5432/postgres
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<publishable-key>
 API_BASE_URL=http://localhost:8000
 SESSION_SECRET=replace_with_a_long_random_secret
 ```
 
-Do not commit a real `.env` file. Ensure the backend uses the internal
-database hostname `db` inside Docker; the browser uses the
-host-published API URL.
+Do not commit a real `.env` file. `DATABASE_URL` is the Supabase pooler
+string. The browser uses the host-published API URL.
 
 Typical local workflow (adjust to the repository's current files):
 

@@ -10,27 +10,16 @@ This file lists every SQL query used in the assignment, separated by section, wi
 
 These queries are written for **PostgreSQL** (note `SERIAL`, `RETURNING`, `plpgsql`, `string_agg`, `::numeric` casts — these are Postgres-specific and will **not** work as-is on MySQL or SQLite).
 
-You have a few options:
+Run them in the **Supabase SQL editor** for this project. That is the database the website and the API use.
 
-1. **Local PostgreSQL installation**
-   - Install PostgreSQL (postgresql.org) and use the bundled **psql** command-line client, or **pgAdmin 4** (GUI) which comes with it.
-   - In psql: `psql -U postgres`, then run `CREATE DATABASE aarogyalink;` followed by `\c aarogyalink` before running the rest.
-   - In pgAdmin: create a database named `aarogyalink`, open its **Query Tool**, and paste the scripts in.
+The project schema and seed are already the files under `database/`. Prefer those files when you reload the live project:
 
-2. **DBeaver / TablePlus / DataGrip** (any general-purpose SQL client)
-   - Create a new PostgreSQL connection pointing at your local or cloud Postgres instance, then run the scripts in its SQL editor.
+1. `database/init_migration_001.sql`
+2. `database/initial_mock_data_load_fixed.sql`
+3. `database/seed_demo_consents.sql`
+4. `database/rls_policies.sql`
 
-3. **Free cloud Postgres (no local install needed)** — good for a quick run/demo:
-   - **Supabase** (supabase.com) — free project gives you a Postgres database + built-in SQL editor in the browser.
-   - **Neon** (neon.tech) — free serverless Postgres with a web SQL editor.
-   - **Railway** or **Render** — spin up a free/low-cost Postgres instance and connect with any client above.
-
-4. **Docker (if you have Docker installed)**
-   ```bash
-   docker run --name aarogyalink-pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres
-   docker exec -it aarogyalink-pg psql -U postgres
-   ```
-   Then run `CREATE DATABASE aarogyalink;`, `\c aarogyalink`, and the scripts below.
+The queries below are the same PostgreSQL statements, grouped for the assignment. Paste a section into the Supabase SQL editor, or connect DBeaver, TablePlus, or DataGrip to the Supabase pooler and run them there.
 
 **Run order matters** — execute the sections in the order they appear in this file (1 → 16), since later sections (views, procedures, triggers) depend on the tables and data created earlier.
 

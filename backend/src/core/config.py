@@ -3,8 +3,8 @@
 Variables:
 - ``DEBUG``: ``true``/``1``/``yes`` enables debug-only endpoints
   (e.g. ``POST /debug/sql``). Keep ``false`` in production.
-- ``DATABASE_URL``: SQLAlchemy URL, e.g.
-  ``postgresql+psycopg://aarogya:aarogya_dev_password@db:5432/aarogya_db``.
+- ``DATABASE_URL``: SQLAlchemy URL for the Supabase PostgreSQL database.
+  Required. Docker Compose sets it.
 """
 
 from __future__ import annotations
@@ -26,11 +26,21 @@ def _as_bool(value: str | None) -> bool:
 
 DEBUG: bool = _as_bool(os.getenv("DEBUG", "false"))
 
-# ``supabase`` keeps the hosted Supabase Auth flow; ``local`` stores password
-# hashes in the local PostgreSQL database (see database/local/).
-AUTH_MODE: str = os.getenv("AUTH_MODE", "supabase").strip().lower()
+_database_url = os.getenv("DATABASE_URL", "").strip()
+if not _database_url:
+    raise RuntimeError(
+        "DATABASE_URL is required. Set it to the Supabase PostgreSQL connection string."
+    )
+DATABASE_URL: str = _database_url
 
-DATABASE_URL: str = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg://aarogya:aarogya_dev_password@localhost:5432/aarogya_db",
-)
+SESSION_SECRET: str = os.getenv("SESSION_SECRET", "arogya-link-dev-session-secret-change-me")
+SUPABASE_URL: str = os.getenv("SUPABASE_URL", "https://izgtbzxrruajihrbxzyx.supabase.co").strip()
+SUPABASE_ANON_KEY: str = os.getenv(
+    "SUPABASE_ANON_KEY",
+    "sb_publishable_K0QhQQfypHet-L8BQOV44Q_D_UvI51j",
+).strip()
+CORS_ORIGINS: list[str] = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]

@@ -2,27 +2,43 @@ from __future__ import annotations
 
 import datetime
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from ..core.access import _has_consent, _has_emergency, actor_from, require_roles
 from ..core.database import get_db
 from ..models.audit_log import AuditLog
 from ..models.doctor import Doctor
 from ..models.patient import Patient
+
+CLIENT_ACTIONS = {"READ", "DENIED", "EMERGENCY_READ", "CONSENT_CHANGE", "VIEW_TIMELINE"}
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
 
 @router.get("")
 def list_audit_logs(
+    request: Request,
     patient_id: str | None = None,
     doctor_id: str | None = None,
     action: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """List immutable audit log ledger records decorated with patient and doctor names."""
+    """List audit rows the caller is allowed to see.
+
+    A patient sees their own record. A doctor sees rows they performed.
+    An administrator sees the network log.
+    """
+    actor = actor_from(request)
+    if actor.role == "patient":
+        patient_id = actor.id
+        doctor_id = None
+    elif actor.role == "doctor":
+        doctor_id = actor.id
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="This action is not available for your role")
     stmt = (
         select(
             AuditLog.log_id,
@@ -63,20 +79,32 @@ def list_audit_logs(
 
 
 @router.post("/break-glass", status_code=201)
-def record_break_glass(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Record an emergency break-glass override with clinical justification."""
-    patient_id = payload.get("patient_id")
-    doctor_id = payload.get("doctor_id")
-    reason = payload.get("reason", "").strip()
+def record_break_glass(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Open a 30-minute emergency window for the signed-in doctor.
 
-    if not patient_id or not doctor_id:
-        raise HTTPException(status_code=400, detail="patient_id and doctor_id are required")
+    The doctor id is taken from the session. The window is refused when that
+    doctor already has active consent, and when the caller is not a doctor.
+    """
+    actor = actor_from(request)
+    require_roles(actor, "doctor")
+    patient_id = payload.get("patient_id")
+    reason = str(payload.get("reason") or "").strip()
+
+    if not patient_id:
+        raise HTTPException(status_code=400, detail="patient_id is required")
     if not reason:
         raise HTTPException(status_code=400, detail="Clinical justification reason is required for emergency override")
+    if not db.scalar(select(Patient.patient_id).where(Patient.patient_id == patient_id)):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if _has_consent(db, patient_id, actor.id or ""):
+        raise HTTPException(
+            status_code=409,
+            detail="Active consent already covers this doctor. Emergency override is only for a doctor who lacks consent.",
+        )
 
     log_entry = AuditLog(
         patient_id=patient_id,
-        doctor_id=doctor_id,
+        doctor_id=actor.id,
         action="EMERGENCY_OVERRIDE",
         action_time=datetime.datetime.now(datetime.timezone.utc),
         details=f"BREAK_GLASS: {reason}",
@@ -92,12 +120,30 @@ def record_break_glass(payload: dict[str, Any], db: Session = Depends(get_db)) -
 
 
 @router.post("", status_code=201)
-def create_audit_entry(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Record an audit trail event (e.g. READ, DENIED, VIEW_TIMELINE)."""
+def create_audit_entry(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Record a portal access event. The caller cannot mint an emergency override."""
+    actor = actor_from(request)
     patient_id = payload.get("patient_id")
     doctor_id = payload.get("doctor_id")
-    action = payload.get("action", "READ")
-    details = payload.get("details", "")
+    action = str(payload.get("action") or "READ")
+    details = str(payload.get("details") or "")
+    if action == "EMERGENCY_OVERRIDE":
+        raise HTTPException(status_code=403, detail="Emergency override is recorded only by the break-glass endpoint")
+    if action not in CLIENT_ACTIONS:
+        raise HTTPException(status_code=400, detail="This audit action cannot be posted by a client")
+    if actor.role == "doctor":
+        doctor_id = actor.id
+        if action in {"READ", "EMERGENCY_READ"}:
+            has_consent = bool(actor.id) and _has_consent(db, str(patient_id), actor.id)
+            has_emergency = bool(actor.id) and _has_emergency(db, str(patient_id), actor.id)
+            if action == "READ" and not (has_consent or has_emergency):
+                raise HTTPException(status_code=403, detail="A read is recorded only when you can open the chart")
+            if action == "EMERGENCY_READ" and not has_emergency:
+                raise HTTPException(status_code=403, detail="An emergency read is recorded only inside the 30-minute window")
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="Access events are recorded when a chart is opened")
+    if not patient_id:
+        raise HTTPException(status_code=400, detail="patient_id is required")
 
     # Debounce duplicate READ / DENIED logs from the same doctor for the same patient within the last 2 minutes
     if action in ("READ", "DENIED", "EMERGENCY_READ") and patient_id and doctor_id:
@@ -131,23 +177,37 @@ def create_audit_entry(payload: dict[str, Any], db: Session = Depends(get_db)) -
 
 @router.get("/emergency-check")
 def check_emergency_access(
+    request: Request,
     patient_id: str = Query(...),
     doctor_id: str = Query(...),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Check if emergency access was recently logged for this patient and doctor."""
-    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
-    stmt = (
-        select(AuditLog)
-        .where(
-            AuditLog.patient_id == patient_id,
-            AuditLog.doctor_id == doctor_id,
-            AuditLog.action == "EMERGENCY_OVERRIDE",
-            AuditLog.action_time >= since,
-        )
-        .order_by(AuditLog.action_time.desc())
+    """Check if a break-glass override is still inside the 30-minute window.
+
+    The same interval is enforced when a chart is opened. Both use the
+    database clock so the portal and the chart cannot disagree. A doctor can
+    check only their own window.
+    """
+    actor = actor_from(request)
+    if actor.role == "doctor":
+        doctor_id = actor.id or doctor_id
+    elif actor.role == "patient":
+        if patient_id != actor.id:
+            raise HTTPException(status_code=403, detail="You can only open your own record")
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="This action is not available for your role")
+    has_emergency = db.scalar(
+        text("""
+            SELECT EXISTS (
+                SELECT 1 FROM audit_log
+                WHERE patient_id = :pid
+                  AND doctor_id = :did
+                  AND action = 'EMERGENCY_OVERRIDE'
+                  AND action_time >= (NOW() - INTERVAL '30 minutes')
+            )
+        """),
+        {"pid": patient_id, "did": doctor_id},
     )
-    has_emergency = db.scalar(stmt) is not None
     return {
         "patient_id": patient_id,
         "doctor_id": doctor_id,

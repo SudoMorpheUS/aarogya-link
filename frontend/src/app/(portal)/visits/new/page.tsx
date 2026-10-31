@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { VisitForm } from "@/components/VisitForm";
 import { requireSession } from "@/lib/session";
-import { api } from "@/lib/api";
+import { api, apiErrorStatus } from "@/lib/api";
 import * as store from "@/lib/store";
 
 export const metadata: Metadata = { title: "Record visit" };
@@ -28,10 +28,9 @@ export default async function NewVisitPage({ searchParams }: { searchParams: Pro
         };
       }
     } catch (err) {
-      console.warn("api.getPatient failed, falling back to local store:", err);
-    }
-    if (!patient) {
-      patient = store.getPatient(patientId);
+      if (apiErrorStatus(err) !== 401 && apiErrorStatus(err) !== 403) {
+        patient = store.getPatient(patientId);
+      }
     }
   }
   if (!patient) notFound();
@@ -105,7 +104,11 @@ export default async function NewVisitPage({ searchParams }: { searchParams: Pro
         };
       });
     }
-  } catch {}
+  } catch (err) {
+    if (apiErrorStatus(err) === 401 || apiErrorStatus(err) === 403) {
+      recent = [];
+    }
+  }
 
   return (
     <div className="page" style={{ ["--page-max" as string]: "960px" }}>

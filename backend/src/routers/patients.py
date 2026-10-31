@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import datetime
+import json
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
+from ..core.access import actor_from, open_chart, require_roles, same_email
+from ..core.chart_sql import CHART_SQL
 from ..core.database import get_db
 from ..core.identity import clean_email, find_account
-from ..models.doctor import Doctor
-from ..models.hospital import Hospital
 from ..models.patient import Patient
-from ..models.schemas import PatientCreate, PatientRead
-from ..models.visit import Diagnosis, LabTest, Prescription, Visit
 
 router = APIRouter(prefix="/api/patients", tags=["patients"])
 
@@ -29,13 +28,32 @@ def _patient_dict(p: Patient) -> dict[str, Any]:
     }
 
 
+def _load_chart(db: Session, patient_id: str) -> dict[str, Any]:
+    """One SQL round trip. The JSON shape matches the portal's chart fields."""
+    raw = db.scalar(text(CHART_SQL), {"pid": patient_id})
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(data, dict) or not data.get("patient"):
+        raise HTTPException(status_code=404, detail="Patient not found")
+    for key in ("timeline", "labs", "prescriptions", "consents"):
+        if not isinstance(data.get(key), list):
+            data[key] = []
+    data["access_events"] = int(data.get("access_events") or 0)
+    return data
+
+
 @router.get("")
 def list_patients(
+    request: Request,
     q: str = Query(default="", description="Search query by name, ID, or email"),
     limit: int = Query(default=100, ge=1, le=5000),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """Search and list patients."""
+    """Search and list patients. A patient receives only their own row."""
+    actor = actor_from(request)
+    if actor.role == "patient":
+        own = db.scalar(select(Patient).where(Patient.patient_id == actor.id)) if actor.id else None
+        return [_patient_dict(own)] if own else []
+    require_roles(actor, "doctor", "admin")
     stmt = select(Patient)
     if q.strip():
         search = f"%{q.strip().lower()}%"
@@ -65,8 +83,12 @@ def list_patients(
 
 
 @router.get("/{patient_id}")
-def get_patient(patient_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Get patient by ID."""
+def get_patient(patient_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Demographics for a signed-in doctor, admin, or the patient themselves."""
+    actor = actor_from(request)
+    require_roles(actor, "patient", "doctor", "admin")
+    if actor.role == "patient" and actor.id != patient_id:
+        raise HTTPException(status_code=403, detail="You can only open your own record")
     patient = db.scalar(select(Patient).where(Patient.patient_id == patient_id))
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -82,8 +104,14 @@ def get_patient(patient_id: str, db: Session = Depends(get_db)) -> dict[str, Any
 
 
 @router.post("", status_code=201)
-def register_patient(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Register a new patient. Writes only to ``patient`` and never to another role's table."""
+def register_patient(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Register a new patient. Writes only to ``patient`` and never to another role's table.
+
+    A Supabase user who is not in the database yet may create only the row for
+    their own email. A signed-in doctor or administrator may register a patient
+    during intake.
+    """
+    actor = actor_from(request)
     full_name = str(payload.get("full_name", "")).strip()
     if not full_name:
         raise HTTPException(status_code=400, detail="Full name is required")
@@ -99,6 +127,10 @@ def register_patient(payload: dict[str, Any], db: Session = Depends(get_db)) -> 
         raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD") from None
 
     clean = clean_email(payload.get("email"))
+    if actor.role is None:
+        same_email(actor, clean)
+    elif actor.role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="You cannot register a patient")
     if clean:
         owner = find_account(db, clean)
         if owner and owner["role"] == "patient":
@@ -137,163 +169,52 @@ def register_patient(payload: dict[str, Any], db: Session = Depends(get_db)) -> 
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/{patient_id}/chart")
+def get_patient_chart(patient_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Patient, timeline, labs, medicines, consents and the access count in one query."""
+    actor = actor_from(request)
+    access = open_chart(db, actor, patient_id)
+    chart = _load_chart(db, patient_id)
+    chart["access"] = access
+    return chart
+
+
 @router.get("/{patient_id}/timeline")
 def get_patient_timeline(
     patient_id: str,
-    doctor_id: str | None = Query(default=None, description="Doctor requesting access for consent verification"),
+    request: Request,
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """Retrieve full longitudinal health timeline for a patient across all hospitals.
-
-    Enforces data privacy: if doctor_id is specified, verifies fn_has_consent or active break-glass.
-    """
-    if doctor_id:
-        has_consent = db.scalar(
-            text("SELECT fn_has_consent(:pid, :did)"),
-            {"pid": patient_id, "did": doctor_id},
-        )
-        if not has_consent:
-            emergency_active = db.scalar(
-                text("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM audit_log
-                        WHERE patient_id = :pid
-                          AND doctor_id = :did
-                          AND action = 'EMERGENCY_OVERRIDE'
-                          AND action_time >= (NOW() - INTERVAL '30 minutes')
-                    )
-                """),
-                {"pid": patient_id, "did": doctor_id},
-            )
-            if not emergency_active:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Access Denied: No active consent or emergency break-glass override granted for this patient.",
-                )
-
-    visits = (
-        db.scalars(
-            select(Visit)
-            .where(Visit.patient_id == patient_id)
-            .order_by(Visit.visit_date.desc())
-        )
-        .all()
-    )
-
-    timeline = []
-    for v in visits:
-        doctor = db.scalar(select(Doctor).where(Doctor.doctor_id == v.doctor_id))
-        hospital = db.scalar(select(Hospital).where(Hospital.hospital_id == v.hospital_id))
-        diagnoses = db.scalars(select(Diagnosis).where(Diagnosis.visit_id == v.visit_id)).all()
-        prescriptions = db.scalars(select(Prescription).where(Prescription.visit_id == v.visit_id)).all()
-        lab_tests = db.scalars(select(LabTest).where(LabTest.visit_id == v.visit_id)).all()
-
-        timeline.append({
-            "visit_id": v.visit_id,
-            "visit_date": v.visit_date.isoformat() if v.visit_date else "",
-            "visit_type": v.visit_type,
-            "chief_complaint": v.chief_complaint,
-            "doctor": {
-                "doctor_id": doctor.doctor_id if doctor else v.doctor_id,
-                "full_name": doctor.full_name if doctor else "Doctor",
-                "specialization": doctor.specialization if doctor else "Specialist",
-            },
-            "hospital": {
-                "hospital_id": hospital.hospital_id if hospital else v.hospital_id,
-                "hospital_name": hospital.hospital_name if hospital else "Hospital",
-                "address": hospital.address if hospital else "",
-            },
-            "diagnoses": [
-                {
-                    "diagnosis_id": d.diagnosis_id,
-                    "disease_code": d.disease_code,
-                    "description": d.description,
-                    "diagnosed_date": d.diagnosed_date.isoformat() if d.diagnosed_date else "",
-                }
-                for d in diagnoses
-            ],
-            "prescriptions": [
-                {
-                    "prescription_id": p.prescription_id,
-                    "medicine_name": p.medicine_name,
-                    "dosage": p.dosage,
-                    "frequency": p.frequency,
-                    "duration": p.duration,
-                }
-                for p in prescriptions
-            ],
-            "lab_tests": [
-                {
-                    "lab_test_id": l.lab_test_id,
-                    "test_name": l.test_name,
-                    "result": l.result,
-                    "unit": l.unit,
-                    "test_date": l.test_date.isoformat() if l.test_date else "",
-                }
-                for l in lab_tests
-            ],
-        })
-    return timeline
+    """Longitudinal history. Consent or a live 30-minute emergency window is required for a doctor."""
+    actor = actor_from(request)
+    open_chart(db, actor, patient_id)
+    return _load_chart(db, patient_id)["timeline"]
 
 
 @router.get("/{patient_id}/prescriptions/active")
-def get_active_prescriptions(patient_id: str, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    """Return recent / active prescriptions for the patient."""
-    stmt = (
-        select(Prescription, Visit, Doctor, Hospital)
-        .join(Visit, Prescription.visit_id == Visit.visit_id)
-        .join(Doctor, Visit.doctor_id == Doctor.doctor_id)
-        .join(Hospital, Visit.hospital_id == Hospital.hospital_id)
-        .where(Visit.patient_id == patient_id)
-        .order_by(Visit.visit_date.desc())
-        .limit(20)
-    )
-    rows = db.execute(stmt).all()
-    results = []
-    for rx, v, doc, hosp in rows:
-        results.append({
-            "prescription_id": rx.prescription_id,
-            "visit_id": rx.visit_id,
-            "medicine_name": rx.medicine_name,
-            "dosage": rx.dosage,
-            "frequency": rx.frequency,
-            "duration": rx.duration,
-            "visit_date": v.visit_date.isoformat() if v.visit_date else "",
-            "doctor_name": doc.full_name,
-            "hospital_name": hosp.hospital_name,
-        })
-    return results
+def get_active_prescriptions(patient_id: str, request: Request, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """Return recent prescriptions for a caller who may open the chart."""
+    actor = actor_from(request)
+    open_chart(db, actor, patient_id)
+    return _load_chart(db, patient_id)["prescriptions"]
 
 
 @router.get("/{patient_id}/labs")
-def get_patient_labs(patient_id: str, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    """Return diagnostic investigations for the patient."""
-    stmt = (
-        select(LabTest, Visit, Hospital)
-        .join(Visit, LabTest.visit_id == Visit.visit_id)
-        .join(Hospital, Visit.hospital_id == Hospital.hospital_id)
-        .where(Visit.patient_id == patient_id)
-        .order_by(LabTest.test_date.desc())
-    )
-    rows = db.execute(stmt).all()
-    results = []
-    for lab, v, hosp in rows:
-        results.append({
-            "lab_test_id": lab.lab_test_id,
-            "visit_id": lab.visit_id,
-            "test_name": lab.test_name,
-            "result": lab.result,
-            "unit": lab.unit,
-            "test_date": lab.test_date.isoformat() if lab.test_date else "",
-            "hospital_name": hosp.hospital_name,
-            "hospital_id": hosp.hospital_id,
-        })
-    return results
+def get_patient_labs(patient_id: str, request: Request, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+    """Return diagnostic investigations for a caller who may open the chart."""
+    actor = actor_from(request)
+    open_chart(db, actor, patient_id)
+    return _load_chart(db, patient_id)["labs"]
 
 
 @router.put("/{patient_id}")
-def update_patient(patient_id: str, payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Update patient demographic details in PostgreSQL (Update operation)."""
+def update_patient(patient_id: str, payload: dict[str, Any], request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Update patient demographic details. The patient may update their own row; an administrator may update any."""
+    actor = actor_from(request)
+    if actor.role == "patient" and actor.id != patient_id:
+        raise HTTPException(status_code=403, detail="You can only update your own record")
+    if actor.role not in {"patient", "admin"}:
+        raise HTTPException(status_code=403, detail="You cannot update this record")
     pat = db.scalar(select(Patient).where(Patient.patient_id == patient_id))
     if not pat:
         raise HTTPException(status_code=404, detail="Patient not found")
@@ -335,8 +256,9 @@ def update_patient(patient_id: str, payload: dict[str, Any], db: Session = Depen
 
 
 @router.delete("/{patient_id}")
-def delete_patient(patient_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
-    """Delete patient record from PostgreSQL (Delete operation)."""
+def delete_patient(patient_id: str, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Delete a patient record. Only an administrator may do this."""
+    require_roles(actor_from(request), "admin")
     pat = db.scalar(select(Patient).where(Patient.patient_id == patient_id))
     if not pat:
         raise HTTPException(status_code=404, detail="Patient not found")

@@ -2,7 +2,6 @@
 
 from .admin_user import AdminUser
 from .audit_log import AuditLog
-from .auth_user import AuthUser
 from .consent import Consent
 from .doctor import Doctor
 from .enums import ConsentStatus, Gender, VisitType
@@ -13,7 +12,6 @@ from .visit import Diagnosis, LabTest, Prescription, Visit
 __all__ = [
     "AdminUser",
     "AuditLog",
-    "AuthUser",
     "Consent",
     "ConsentStatus",
     "Diagnosis",

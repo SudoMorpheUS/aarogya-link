@@ -11,7 +11,6 @@ services:
       BACKEND_API_URL: http://backend:8000
       NEXT_PUBLIC_SUPABASE_URL: https://izgtbzxrruajihrbxzyx.supabase.co
       NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_K0QhQQfypHet-L8BQOV44Q_D_UvI51j
-      AUTH_MODE: supabase
       SESSION_SECRET: ${SESSION_SECRET:-arogya-link-dev-session-secret-change-me}
       TZ: "Asia/Kolkata"
     depends_on:
@@ -25,13 +24,16 @@ services:
       dockerfile: Dockerfile
     container_name: aarogya-backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./backend:/app
     environment:
       DATABASE_URL: postgresql+psycopg://postgres.izgtbzxrruajihrbxzyx:RFXsx2YSQQ%25_m.m@aws-0-ap-southeast-2.pooler.supabase.com:5432/postgres
-      AUTH_MODE: supabase
       PYTHONUNBUFFERED: "1"
       TZ: "Asia/Kolkata"
+      SESSION_SECRET: ${SESSION_SECRET:-arogya-link-dev-session-secret-change-me}
+      SUPABASE_URL: https://izgtbzxrruajihrbxzyx.supabase.co
+      SUPABASE_ANON_KEY: sb_publishable_K0QhQQfypHet-L8BQOV44Q_D_UvI51j
+      CORS_ORIGINS: http://localhost:3000
     restart: unless-stopped
 

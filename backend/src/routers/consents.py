@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import datetime
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, aliased
 
+from ..core.access import actor_from
 from ..core.database import get_db
 from ..models.audit_log import AuditLog
 from ..models.consent import Consent
@@ -55,13 +56,21 @@ def extract_city_state(address: str | None) -> tuple[str, str]:
 
 @router.get("")
 def list_consents(
+    request: Request,
     patient_id: str | None = None,
     doctor_id: str | None = None,
     hospital_id: str | None = None,
     limit: int = Query(default=100, ge=1, le=5000),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    """List consent grants decorated with patient, hospital, doctor specialization, and location/state."""
+    """List consent grants the caller is allowed to see."""
+    actor = actor_from(request)
+    if actor.role == "patient":
+        patient_id = actor.id
+    elif actor.role == "doctor":
+        doctor_id = actor.id
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="This action is not available for your role")
     DocHospital = aliased(Hospital)
 
     stmt = (
@@ -166,11 +175,23 @@ def get_patient_consent_distribution(
 
 
 @router.post("", status_code=201)
-def grant_consent(payload: dict[str, Any], db: Session = Depends(get_db)) -> dict[str, Any]:
+def grant_consent(payload: dict[str, Any], request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
     """Grant dynamic consent using stored procedure or direct insert and write to audit log."""
+    actor = actor_from(request)
     patient_id = payload.get("patient_id")
     hospital_id = payload.get("hospital_id") or None
     doctor_id = payload.get("doctor_id") or None
+    if actor.role == "patient":
+        if patient_id != actor.id:
+            raise HTTPException(status_code=403, detail="You can only grant consent for your own record")
+    elif actor.role == "doctor":
+        own_hospital = db.scalar(select(Doctor.hospital_id).where(Doctor.doctor_id == actor.id))
+        if doctor_id and doctor_id != actor.id:
+            raise HTTPException(status_code=403, detail="You can only grant consent that names you")
+        if hospital_id and hospital_id != own_hospital:
+            raise HTTPException(status_code=403, detail="You can only grant consent for your own hospital")
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="You cannot grant consent")
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     start_date_val = payload.get("start_date") or datetime.datetime.now(ist_tz).date().isoformat()
     end_date_val = payload.get("end_date") or None
@@ -249,11 +270,21 @@ def grant_consent(payload: dict[str, Any], db: Session = Depends(get_db)) -> dic
 
 
 @router.post("/{consent_id}/revoke")
-def revoke_consent(consent_id: int, payload: dict[str, Any] | None = None, db: Session = Depends(get_db)):
+def revoke_consent(
+    consent_id: int,
+    request: Request,
+    payload: dict[str, Any] | None = None,
+    db: Session = Depends(get_db),
+):
     """Revoke an active consent and record CONSENT_CHANGE in the audit log."""
+    actor = actor_from(request)
     consent = db.scalar(select(Consent).where(Consent.consent_id == consent_id))
     if not consent:
         raise HTTPException(status_code=404, detail="Consent not found")
+    if actor.role == "patient" and consent.patient_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only revoke your own consent")
+    if actor.role not in {"patient", "admin"}:
+        raise HTTPException(status_code=403, detail="You cannot revoke this consent")
 
     ist_tz = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
     today = datetime.datetime.now(ist_tz).date()
@@ -351,11 +382,20 @@ def revoke_consent(consent_id: int, payload: dict[str, Any] | None = None, db: S
 
 @router.get("/check")
 def check_consent(
+    request: Request,
     patient_id: str = Query(...),
     doctor_id: str = Query(...),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Execute fn_has_consent(patient_id, doctor_id) stored function in PostgreSQL."""
+    actor = actor_from(request)
+    if actor.role == "doctor":
+        doctor_id = actor.id or doctor_id
+    elif actor.role == "patient":
+        if patient_id != actor.id:
+            raise HTTPException(status_code=403, detail="You can only open your own record")
+    elif actor.role != "admin":
+        raise HTTPException(status_code=403, detail="This action is not available for your role")
     try:
         has_consent = db.scalar(
             text("SELECT fn_has_consent(:pid, :did)"),
@@ -388,12 +428,30 @@ def check_consent(
 
 
 @router.delete("/{consent_id}")
-def delete_consent(consent_id: int, db: Session = Depends(get_db)):
-    """Hard delete a consent record from PostgreSQL (Delete operation)."""
+def delete_consent(consent_id: int, request: Request, db: Session = Depends(get_db)):
+    """Remove a consent row and leave a CONSENT_DELETE event in the audit log."""
+    actor = actor_from(request)
     c = db.scalar(select(Consent).where(Consent.consent_id == consent_id))
     if not c:
         raise HTTPException(status_code=404, detail="Consent record not found")
+    if actor.role == "patient" and c.patient_id != actor.id:
+        raise HTTPException(status_code=403, detail="You can only delete your own consent")
+    if actor.role not in {"patient", "admin"}:
+        raise HTTPException(status_code=403, detail="You cannot delete this consent")
     try:
+        db.add(
+            AuditLog(
+                patient_id=c.patient_id,
+                doctor_id=c.doctor_id if actor.role != "admin" else c.doctor_id,
+                action="CONSENT_DELETE",
+                action_time=datetime.datetime.now(datetime.timezone.utc),
+                details=(
+                    f"consent_id={c.consent_id} status={c.status} "
+                    f"hospital={c.hospital_id or '—'} doctor={c.doctor_id or '—'} "
+                    f"deleted_by={actor.role}:{actor.email}"
+                ),
+            )
+        )
         db.delete(c)
         db.commit()
         return {"status": "ok", "message": f"Consent {consent_id} permanently removed."}

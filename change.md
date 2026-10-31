@@ -208,16 +208,18 @@ AarogyaLink defines three core relational views in [`database/init_migration_001
 
 ---
 
-## 8. Cloud Database Support
+## 8. Supabase Database
 
-- The application is decoupled from local storage via the standard connection URI:
+- PostgreSQL runs on Supabase. The backend reads one connection string:
   ```env
   DATABASE_URL=postgresql+psycopg://user:password@host:5432/dbname
   ```
-- To switch to **Supabase**, **Neon**, **AWS RDS**, or **Render PostgreSQL**:
-  1. Set `DATABASE_URL` in `docker-compose.yml` or `.env`.
-  2. Run the migration script [`database/init_migration_001.sql`](database/init_migration_001.sql).
-  3. The FastAPI backend and Next.js portal connect seamlessly without code changes.
+- `docker-compose.yml` sets `DATABASE_URL` to the Supabase pooler. Sign-in uses Supabase Authentication (`NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`).
+- Load the project in the Supabase SQL editor in this order:
+  1. [`database/init_migration_001.sql`](database/init_migration_001.sql)
+  2. [`database/initial_mock_data_load_fixed.sql`](database/initial_mock_data_load_fixed.sql)
+  3. [`database/seed_demo_consents.sql`](database/seed_demo_consents.sql)
+  4. [`database/rls_policies.sql`](database/rls_policies.sql)
 
 ---
 

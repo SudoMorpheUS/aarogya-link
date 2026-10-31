@@ -44,7 +44,7 @@ flowchart TD
     subgraph Application["Application Layer (FastAPI & Uvicorn)"]
         API["FastAPI REST Endpoints\n(/api/patients, /api/visits, /api/duplicates,\n/api/hospitals, /api/consents, /api/audit)"]
         PolicyEngine["Consent Policy Engine\n& Break-Glass Verifier"]
-        AuthRouter["Session Authentication Router\n(PBKDF2 Local / Supabase Auth)"]
+        AuthRouter["Session Authentication Router\n(Supabase Auth)"]
     end
 
     subgraph Database["Database Layer (PostgreSQL 17 • Relational BCNF)"]
@@ -203,7 +203,7 @@ erDiagram
 | `audit_log` | `log_id` | `patient_id`, `doctor_id` (opt) | SET NULL / RESTRICT | Append-only ledger recording all data access and clinical actions. |
 | `admin_user` | `email` | — | RESTRICT | Platform administrative accounts for compliance governance. |
 
-> *Note on Local Authentication:* When running self-hosted without cloud IAM, an auxiliary credential table `public.auth_user` (`email PK`, `password_hash`, `role`, `user_id`, `created_at`) is maintained in `database/local/00_local_auth_compat.sql` to manage salted PBKDF2 hashes for local logins.
+Sign-in uses Supabase Authentication. The browser obtains a Supabase session, then `POST /api/auth/session` maps the email through `GET /api/auth/lookup` onto one role (`patient`, `doctor`, or `admin`) and stores an HMAC-signed httpOnly cookie named `al_session` for 8 hours. Passwords are not stored in the AarogyaLink tables.
 
 ---
 
@@ -333,85 +333,55 @@ AarogyaLink enforces strict separation of concerns across three distinct user ro
 
 ## 🚀 How to Run the Project
 
-### Method 1: Fully Local Docker Stack (Recommended / Demo Mode)
-Runs **PostgreSQL 17, FastAPI backend, and Next.js frontend entirely inside Docker**. All data stays on your local machine, keeping sample patient health records private and off the public internet.
+The only database is the hosted Supabase PostgreSQL project. Apply the SQL files in the Supabase SQL editor in this order:
+
+1. `database/init_migration_001.sql`
+2. `database/initial_mock_data_load_fixed.sql`
+3. `database/seed_demo_consents.sql`
+4. `database/rls_policies.sql`
+
+### Method 1: Docker Compose (demo)
+
+`docker-compose.yml` starts the Next.js frontend and the FastAPI backend. Both talk to Supabase. Authentication is Supabase Auth.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+docker compose up -d --build
 ```
 
 #### Endpoints:
 * **Frontend Web App:** [http://localhost:3000](http://localhost:3000)
 * **Backend REST API:** [http://localhost:8000](http://localhost:8000)
 * **API Documentation:** [http://localhost:8000/docs](http://localhost:8000/docs) or [http://localhost:8000/redoc](http://localhost:8000/redoc)
-* **PostgreSQL Port:** `localhost:5434` (mapped from container `5432` to avoid host conflicts)
-* **Database Credentials:** user `postgres` / password `postgres` / database `arogya`
-* **Local Storage Directory:** `./database/pgdata` (git-ignored)
+* **Health:** [http://localhost:8000/health](http://localhost:8000/health)
 
-To reset the database and re-seed from scratch:
-```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml down
-# Linux / macOS:
-rm -rf database/pgdata
-# Windows PowerShell:
-Remove-Item -Recurse -Force database\pgdata
-```
+Stop the containers with `docker compose down`. Schema and seed data stay in Supabase.
 
 ---
 
-### Method 2: Docker Compose with Cloud Database (Supabase)
-Connects the containerized frontend and backend to a hosted Supabase PostgreSQL instance:
+### Method 2: App processes on the host, database on Supabase
+
+Use this when you want FastAPI reload and Next.js hot reload. Set `DATABASE_URL` to the Supabase pooler connection string (`postgresql+psycopg://...`). Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` to the project URL and publishable key. Do not commit those values.
 
 ```bash
-docker compose up -d --build
+cd backend
+# PowerShell: $env:DATABASE_URL = "<supabase connection string>"
+python -m uvicorn main:app --reload --port 8000
 ```
 
----
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### Method 3: Hybrid Local Development (Docker DB + Hot Reloading)
-Best for active development with FastAPI live reloading and Next.js Turbopack HMR:
-
-1. **Start the local PostgreSQL container:**
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres
-   ```
-
-2. **Run Backend Locally:**
-   ```bash
-   cd backend
-   # Windows PowerShell:
-   $env:DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5434/arogya"
-   $env:AUTH_MODE="local"
-   $env:SESSION_SECRET="dev-session-secret"
-   python -m uvicorn main:app --reload --port 8000
-
-   # Linux / macOS:
-   # export DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:5434/arogya"
-   # export AUTH_MODE="local"
-   # export SESSION_SECRET="dev-session-secret"
-   # uvicorn main:app --reload --port 8000
-   ```
-
-3. **Run Frontend Locally:**
-   ```bash
-   cd frontend
-   npm install
-   # Windows PowerShell:
-   $env:AUTH_MODE="local"
-   $env:SESSION_SECRET="dev-session-secret"
-   npm run dev
-
-   # Linux / macOS:
-   # export AUTH_MODE="local"
-   # export SESSION_SECRET="dev-session-secret"
-   # npm run dev
-   ```
-   Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000).
 
 ---
 
-### Method 4: Standalone Offline Frontend Mode
-If Docker or Python is unavailable, Next.js includes a client-side in-memory relational simulation mirroring the BCNF schema, consent rules, and views:
+### Method 3: Offline frontend preview
+
+If Supabase and the API are unavailable, the Next.js app can render from an in-memory sample store. That preview does not read or write PostgreSQL.
+
 ```bash
 cd frontend
 npm install
@@ -426,10 +396,14 @@ The login screen features **1-Click Instant Persona Logins** pre-configured for 
 
 | Role | Persona Name | Email | Password | Pre-configured Access & Privileges |
 | :--- | :--- | :--- | :--- | :--- |
-| **Patient** | Karthik Iyer | `karthik.iyer@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1001`. View longitudinal records, manage active consents, view access log. |
-| **Doctor** | Dr. Rohan Mehta | `rohan.mehta@example.in` | `AarogyaLink@123` | Doctor ID `DOC-01`. Cardiology @ Apollo Hospitals (`HSP1001`). View permitted charts, record visits, view duplicate alerts. |
-| **Emergency Doctor** | Dr. Arjun Singh | `arjun.singh@example.in` | `AarogyaLink@123` | Doctor ID `DOC-03`. Emergency Medicine @ Fortis Healthcare (`HSP1002`). Break-glass override testing. |
-| **Administrator** | Central Administrator | `admin@aarogyalink.in` | `AarogyaLink@123` | Network overview, 50-hospital caseload statistics, patient roster sync, audit trail inspection. |
+| **Patient** | Mudit Jha | `mudit@gmail.com` | `AarogyaLink@123` | Patient ID `PAT-IN-105001`. Consents and prescriptions for the patient walkthrough. |
+| **Patient** | Karthik Iyer | `karthik.iyer@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1002`. Longitudinal record, consents, and access log. |
+| **Patient** | Devansh Gupta | `devansh.gupta@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1006`. Chart used for the blocked-access and break-glass demo. |
+| **Patient** | Meera Nair | `meera.nair@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1005`. Active medicines and remaining course days. |
+| **Doctor** | Dr. Rohan Mehta | `rohan.mehta@example.in` | `AarogyaLink@123` | Doctor ID `DOC-01`. Cardiology at Apollo Hospitals (`HSP1001`). |
+| **Doctor** | Dr. Nisha Kapoor | `nisha.kapoor@example.in` | `AarogyaLink@123` | Doctor ID `DOC-04`. Internal Medicine at Fortis (`HSP1002`). |
+| **Doctor** | Dr. Vikram Sharma | `vikram.sharma@example.in` | `AarogyaLink@123` | Doctor ID `DOC-05`. Orthopedics at AIIMS (`HSP1005`). |
+| **Administrator** | Central Administrator | `admin@arogyalink.in` | `AarogyaLink@123` | Network overview, hospital caseload, duplicate lab tests, and the audit trail. |
 
 ---
 
@@ -451,16 +425,13 @@ The database seeds a national multi-hospital healthcare network across major Ind
 ```
 arogya-link/
 ├── README.md                      # Complete system documentation (this file)
-├── docker-compose.yml             # Cloud Supabase deployment configuration
-├── docker-compose.local.yml       # Fully local PostgreSQL 17 + local auth stack
+├── docker-compose.yml             # Frontend and backend; database is Supabase
 ├── database/
 │   ├── init_migration_001.sql     # Core BCNF Schema (10 tables, views, functions, triggers, indexes)
 │   ├── initial_mock_data_load_fixed.sql # Seed dataset (50 hospitals, 700+ patients, 1300+ visits)
 │   ├── seed_demo_consents.sql     # Demo patient consents, doctor associations & sequence fix
 │   ├── rls_policies.sql           # Row Level Security policies for production hardening
-│   ├── check_rls.sql              # Security audit verification script
-│   └── local/
-│       └── 00_local_auth_compat.sql # Local PBKDF2 auth table & compatibility helpers
+│   └── check_rls.sql              # Security audit verification script
 ├── frontend/                      # Next.js 16 Web Application (App Router, React 19)
 │   ├── src/
 │   │   ├── app/                   # App Router pages (/dashboard, /consents, /patients, /hospitals, /audit)

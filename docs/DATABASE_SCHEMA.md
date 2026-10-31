@@ -476,8 +476,8 @@ Fill in the following details in the registration form:
 When an administrator registers a patient:
 1. **User Identifier**: The patient logs in using the **Email address** provided during registration (e.g. `sunita.d@example.in`).
 2. **Password**:
-   - **Default Initial Password**: `ArogyaLink@2026` (or `ArogyaLink@123`). The system automatically creates their Firebase account on their first login with this password.
-   - **Custom Password**: The patient can also click the **"Create Account"** tab at any time, enter their email, and set their own personal password. Because their email is already in the database, AarogyaLink immediately connects them to their existing medical history and patient ID (`PAT-IN-xxxx`).
+   - **Demo password**: `AarogyaLink@123`. Sign-in creates a Supabase Authentication session, then the app maps that email to the existing patient row.
+   - **New account**: On **Create Account**, the patient sets a password. Supabase Authentication stores the credential. If that email is already a patient, doctor, or admin row, the form asks them to sign in so the existing record is kept.
 
 ---
 
@@ -496,20 +496,7 @@ every public table, recreates the helper functions as `SECURITY DEFINER`, and ad
 - a safe `v_doctor_directory` view for doctor name/specialty lookups without exposing
   doctor email or contact details.
 
-### Local authentication mode
-
-When the stack runs entirely in Docker (`docker-compose.local.yml`), `AUTH_MODE=local`
-uses the same PostgreSQL instance for authentication:
-
-- `database/local/00_local_auth_compat.sql` creates the Supabase-style roles
-  (`anon`, `authenticated`, `service_role`), the `auth.jwt()` helper schema, and the
-  `public.auth_user` table.
-- Passwords are stored as salted PBKDF2-HMAC-SHA256 hashes, never plaintext.
-- FastAPI exposes `POST /api/auth/local/login` and `POST /api/auth/local/password`;
-  Next.js stores an HMAC-signed, httpOnly session cookie.
-- Demo accounts are seeded by the backend on first start with password
-  `AarogyaLink@123`; other seeded profiles can claim a password from the
-  **Create Account** tab without changing their existing role or records.
+Authentication is Supabase Auth. AarogyaLink does not store password hashes. After sign-in, Next.js stores an HMAC-signed httpOnly session cookie that names the role returned by `GET /api/auth/lookup`.
 
 Audit the live project with `database/check_rls.sql`. The strict check for tables that
 still have RLS disabled is:

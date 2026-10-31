@@ -49,6 +49,16 @@ export function durationDays(duration: string): number | null {
   return m[2].toLowerCase() === "day" ? n : m[2].toLowerCase() === "week" ? n * 7 : n * 30;
 }
 
+/** Days remaining on a course that started on visitDate, or null if the duration cannot be read. */
+export function courseDaysLeft(visitDate: string | null | undefined, duration: string | null | undefined): number | null {
+  if (!visitDate || !duration) return null;
+  const days = durationDays(duration);
+  if (days === null) return null;
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return daysBetween(today, addDays(visitDate, days));
+}
+
 /** "PAT-IN-1002" -> "ID ••••1002". Patient identifiers are masked until the user reveals them. */
 export function maskId(id: string): string {
   return `ID ••••${id.slice(-4)}`;

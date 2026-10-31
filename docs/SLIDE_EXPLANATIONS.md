@@ -18,7 +18,7 @@
 8. [Slide 8: Relational Schema & Integrity Constraints](#slide-8-relational-schema--integrity-constraints)
 9. [Slide 9: Database Normalization (BCNF Analysis)](#slide-9-database-normalization-bcnf-analysis)
 10. [Slide 10: SQL Implementation & DDL Construction](#slide-10-sql-implementation--ddl-construction)
-11. [Slide 11: Deployment Strategy: Local vs. Cloud Database](#slide-11-deployment-strategy-local-vs-cloud-database)
+11. [Slide 11: Deployment on Supabase](#slide-11-deployment-on-supabase)
 12. [Slide 12: Indexing & Query Optimization](#slide-12-indexing--query-optimization)
 13. [Slide 13: Security & Role-Based Access Control (RBAC)](#slide-13-security--role-based-access-control-rbac)
 14. [Slide 14: Administrator Dashboard (UI Walkthrough)](#slide-14-administrator-dashboard-ui-walkthrough)
@@ -215,17 +215,18 @@
 
 ---
 
-### Slide 11: Deployment Strategy: Local vs. Cloud Database
+### Slide 11: Deployment on Supabase
 * **Slide Text:**  
-  * We didn’t use one [cloud database]. The database runs locally in Docker.
-  * That keeps the demo simple and keeps the sample data off the internet.
-  * Moving later would be straightforward: Supabase, Neon or AWS RDS all run PostgreSQL.
+  * PostgreSQL 17 runs on Supabase.
+  * Docker Compose starts only the Next.js frontend and the FastAPI backend.
+  * Sign-in is Supabase Authentication. The API maps the email to one role and sets an httpOnly session cookie.
 * **Technical Details:**  
-  * **Fully Local Containerization:** Powered by [`docker-compose.local.yml`](file:///d:/Projects/DBMS/arogya-link_new/arogya-link_new/arogya-link/docker-compose.local.yml). Spins up `postgres:17-alpine` on host port `5434` with persistent volume mounting (`./database/pgdata`).
-  * **Privacy Advantage:** Health data regulations (DISHA / DPDP Act in India) mandate strict data locality. Running locally in Docker ensures zero protected health information leaves the local evaluation environment.
-  * **Cloud Compatibility:** Uses standard PostgreSQL syntax without proprietary extensions, meaning migration to AWS RDS, Supabase, or Neon requires only changing the `DATABASE_URL` environment variable.
+  * **Database:** Hosted Supabase project `izgtbzxrruajihrbxzyx`, region `ap-southeast-2`. The backend uses the Supabase pooler through `DATABASE_URL` in `docker-compose.yml`.
+  * **Schema load order in the Supabase SQL editor:** `database/init_migration_001.sql`, `database/initial_mock_data_load_fixed.sql`, `database/seed_demo_consents.sql`, `database/rls_policies.sql`.
+  * **Start command:** `docker compose up -d --build`. Frontend at `http://localhost:3000`. API at `http://localhost:8000`.
+  * **Row Level Security** is installed by `database/rls_policies.sql`. The synthetic seed is the evaluation dataset already loaded in that project.
 * **What to Say (Speaking Script):**  
-  > "For this evaluation, we purposefully deploy our PostgreSQL database locally via Docker Compose rather than relying on a public cloud provider. This guarantees privacy by keeping synthetic patient data off the public internet, prevents cloud latency or quota limits during demonstration, and complies with healthcare data sovereignty principles. Because it is standard PostgreSQL 17, migrating to AWS RDS, Supabase, or Neon in production is simply a matter of changing a connection string."
+  > "The database is PostgreSQL 17 on Supabase. Docker runs the website and the API on this laptop, and both of them connect to that hosted database. Accounts are created in Supabase Authentication. After sign-in, the API looks up the email in patient, doctor, or admin_user and issues a signed session cookie. The schema, seed data, demo consents, and row-level security policies are the four SQL files we run in the Supabase SQL editor."
 
 ---
 

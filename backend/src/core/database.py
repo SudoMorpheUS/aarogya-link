@@ -15,7 +15,9 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from .config import DATABASE_URL
 
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+# The database is the Supabase pooler in ap-southeast-2. A pre-ping is an extra
+# round trip on every checkout, so stale connections are recycled by age instead.
+engine = create_engine(DATABASE_URL, pool_pre_ping=False, pool_recycle=300)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

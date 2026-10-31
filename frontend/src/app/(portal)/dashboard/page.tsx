@@ -16,9 +16,9 @@ import {
   VisibilityNote,
 } from "@/components/ui";
 import { attentionFor } from "@/lib/attention";
-import { ageOn, formatDate, formatDateTime, GENDER_LABEL, maskId } from "@/lib/format";
+import { ageOn, courseDaysLeft, formatDate, formatDateTime, GENDER_LABEL, maskId } from "@/lib/format";
 import { assessLab } from "@/lib/lab-ranges";
-import { api } from "@/lib/api";
+import { api, apiErrorStatus } from "@/lib/api";
 import { requireSession } from "@/lib/session";
 import * as store from "@/lib/store";
 import type { Session } from "@/lib/types";
@@ -38,25 +38,68 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
 
 // ---------------------------------------------------------------- patient
 
+function mapTimeline(id: string, rows: { visit_id: number; visit_date: string; visit_type: string; chief_complaint: string | null; doctor: { doctor_id: string; full_name: string }; hospital: { hospital_id: string; hospital_name: string }; diagnoses: unknown; prescriptions: unknown; lab_tests: unknown }[]) {
+  return rows.map((t) => ({
+    visit_id: t.visit_id,
+    patient_id: id,
+    hospital_id: t.hospital.hospital_id,
+    hospital_name: t.hospital.hospital_name,
+    doctor_id: t.doctor.doctor_id,
+    doctor_name: t.doctor.full_name,
+    visit_date: t.visit_date,
+    visit_type: t.visit_type,
+    chief_complaint: t.chief_complaint,
+    diagnoses: t.diagnoses,
+    prescriptions: t.prescriptions,
+    labs: t.lab_tests,
+  }));
+}
+
 async function PatientDashboard({ session, showAll }: { session: Session; showAll: boolean }) {
   const id = session.id!;
+  const today = store.today();
   let patient: any = null;
+  let entries: any[] = [];
+  let consents: any[] = [];
+  let labs: any[] = [];
+  let meds: any[] = [];
+  let events = 0;
   try {
-    const p = await api.getPatient(id);
-    if (p) {
-      patient = {
-        patient_id: p.patient_id,
-        full_name: p.full_name,
-        date_of_birth: p.date_of_birth,
-        gender: p.gender as any,
-        blood_group: p.blood_group as any,
-        contact_number: p.contact_number,
-        email: p.email,
-      };
+    const chart = await api.getChart(id);
+    const p = chart.patient;
+    patient = {
+      patient_id: p.patient_id,
+      full_name: p.full_name,
+      date_of_birth: p.date_of_birth,
+      gender: p.gender as any,
+      blood_group: p.blood_group as any,
+      contact_number: p.contact_number,
+      email: p.email,
+    };
+    entries = mapTimeline(id, chart.timeline || []);
+    consents = (chart.consents || []).filter(
+      (c) => c.status === "Active" && c.start_date <= today && (!c.end_date || c.end_date >= today),
+    );
+    labs = chart.labs || [];
+    meds = (chart.prescriptions || [])
+      .map((m) => ({
+        ...m,
+        days_left: typeof m.days_left === "number" ? m.days_left : courseDaysLeft(m.visit_date, m.duration),
+      }))
+      .filter((m) => m.days_left === null || m.days_left >= 0);
+    events = chart.access_events || 0;
+  } catch (err) {
+    const status = apiErrorStatus(err);
+    if (status !== 401 && status !== 403) {
+      patient = store.getPatient(id);
+      entries = store.timeline(id);
+      consents = store
+        .consentsOf(id)
+        .filter((c) => c.status === "Active" && c.start_date <= today && (!c.end_date || c.end_date >= today));
+      labs = store.labsOf(id);
+      meds = store.activePrescriptions(id);
+      events = store.auditForPatient(id).filter((a) => ["READ", "EMERGENCY_READ", "DENIED"].includes(a.action)).length;
     }
-  } catch {}
-  if (!patient) {
-    patient = store.getPatient(id);
   }
   if (!patient) {
     patient = {
@@ -69,64 +112,6 @@ async function PatientDashboard({ session, showAll }: { session: Session; showAl
       email: session.email || "",
     };
   }
-
-  let entries = store.timeline(id);
-  try {
-    const apiTimeline = await api.getTimeline(id);
-    if (apiTimeline && apiTimeline.length > 0) {
-      entries = apiTimeline.map((t) => ({
-        visit_id: t.visit_id,
-        patient_id: id,
-        hospital_id: t.hospital.hospital_id,
-        hospital_name: t.hospital.hospital_name,
-        doctor_id: t.doctor.doctor_id,
-        doctor_name: t.doctor.full_name,
-        visit_date: t.visit_date,
-        visit_type: t.visit_type,
-        chief_complaint: t.chief_complaint,
-        diagnoses: t.diagnoses,
-        prescriptions: t.prescriptions,
-        labs: t.lab_tests,
-      })) as any;
-    }
-  } catch {}
-
-  const today = store.today();
-  let consents = store
-    .consentsOf(id)
-    .filter((c) => c.status === "Active" && c.start_date <= today && (!c.end_date || c.end_date >= today));
-  try {
-    const apiConsents = await api.getConsents(id);
-    if (apiConsents) {
-      consents = apiConsents.filter(
-        (c) => c.status === "Active" && c.start_date <= today && (!c.end_date || c.end_date >= today),
-      ) as any;
-    }
-  } catch {}
-
-  let labs = store.labsOf(id);
-  try {
-    const apiLabs = await api.getPatientLabs(id);
-    if (apiLabs && apiLabs.length > 0) {
-      labs = apiLabs;
-    }
-  } catch {}
-
-  let meds = store.activePrescriptions(id);
-  try {
-    const apiMeds = await api.getActivePrescriptions(id);
-    if (apiMeds && apiMeds.length > 0) {
-      meds = apiMeds;
-    }
-  } catch {}
-
-  let events = store.auditForPatient(id).filter((a) => ["READ", "EMERGENCY_READ", "DENIED"].includes(a.action)).length;
-  try {
-    const apiLogs = await api.getAuditLogs(id, undefined, 500);
-    if (apiLogs) {
-      events = apiLogs.filter((a) => ["READ", "EMERGENCY_READ", "DENIED"].includes(a.action)).length;
-    }
-  } catch {}
 
   const team = [...new Map(entries.map((e) => [e.doctor_id, e])).values()];
   const last = entries[0];
@@ -202,10 +187,10 @@ async function PatientDashboard({ session, showAll }: { session: Session; showAl
                     <strong className="truncate">
                       {m.medicine_name} {m.dosage}
                     </strong>
-                    {m.days_left !== null && m.days_left <= 14 ? (
+                    {typeof m.days_left === "number" && m.days_left <= 14 ? (
                       <Chip tone="attention">Refill in {m.days_left}d</Chip>
                     ) : (
-                      <Chip>{m.days_left === null ? "Ongoing" : `${m.days_left} days left`}</Chip>
+                      <Chip>{typeof m.days_left === "number" ? `${m.days_left} days left` : "Ongoing"}</Chip>
                     )}
                   </span>
                   <span className="muted" style={{ fontSize: "var(--fs-sm)" }}>
@@ -397,79 +382,39 @@ async function DoctorDashboard({ session, showAll, selected }: { session: Sessio
   } | null = null;
 
   if (target) {
-    let hasConsent = false;
     try {
-      const consentRes = await api.checkConsent(target.patient_id, id);
-      hasConsent = Boolean(consentRes?.has_consent);
-    } catch {
-      hasConsent = store.hasConsent(target.patient_id, id);
-    }
-
-    let hasEmergency = false;
-    try {
-      const emRes = await api.checkEmergencyAccess(target.patient_id, id);
-      hasEmergency = Boolean(emRes?.has_emergency_access);
-    } catch {
-      hasEmergency = store.hasEmergencyAccess(target.patient_id, id);
-    }
-
-    if (hasConsent || hasEmergency) {
-      const level = hasConsent ? "consent" : "emergency";
-      let timelineEntries: any[] = store.timeline(target.patient_id);
-      try {
-        const apiTl = await api.getTimeline(target.patient_id);
-        if (apiTl && apiTl.length > 0) {
-          timelineEntries = apiTl.map((t) => ({
-            visit_id: t.visit_id,
-            patient_id: target!.patient_id,
-            hospital_id: t.hospital.hospital_id,
-            hospital_name: t.hospital.hospital_name,
-            doctor_id: t.doctor.doctor_id,
-            doctor_name: t.doctor.full_name,
-            visit_date: t.visit_date,
-            visit_type: t.visit_type,
-            chief_complaint: t.chief_complaint,
-            diagnoses: t.diagnoses,
-            prescriptions: t.prescriptions,
-            labs: t.lab_tests,
-          }));
-        }
-      } catch {}
-
-      let targetLabs: any[] = store.labsOf(target.patient_id);
-      try {
-        const apiLabs = await api.getPatientLabs(target.patient_id);
-        if (apiLabs && apiLabs.length > 0) {
-          targetLabs = apiLabs;
-        }
-      } catch {}
-
-      let activeMeds: any[] = store.activePrescriptions(target.patient_id);
-      try {
-        const apiMeds = await api.getActivePrescriptions(target.patient_id);
-        if (apiMeds && apiMeds.length > 0) {
-          activeMeds = apiMeds;
-        }
-      } catch {}
-
+      const bundle = await api.getChart(target.patient_id);
+      const level = bundle.access === "emergency" ? "emergency" : "consent";
       chart = {
         ok: true,
         level,
-        timeline: timelineEntries,
-        recentLabs: targetLabs,
-        prescriptions: activeMeds,
+        timeline: mapTimeline(target.patient_id, bundle.timeline || []),
+        recentLabs: bundle.labs || [],
+        prescriptions: (bundle.prescriptions || [])
+          .map((m) => ({
+            ...m,
+            days_left: typeof m.days_left === "number" ? m.days_left : courseDaysLeft(m.visit_date, m.duration),
+          }))
+          .filter((m) => m.days_left === null || m.days_left >= 0),
       };
-
-      try {
-        await api.createAuditEntry({
-          patient_id: target.patient_id,
-          doctor_id: id,
-          action: level === "emergency" ? "EMERGENCY_READ" : "READ",
-          details: `Viewed summary for patient ${target.full_name} (${target.patient_id})`,
-        });
-      } catch {}
-    } else {
-      chart = { ok: false, timeline: [], recentLabs: [], prescriptions: [] };
+    } catch (err) {
+      const status = apiErrorStatus(err);
+      if (status === 401 || status === 403) {
+        chart = { ok: false, timeline: [], recentLabs: [], prescriptions: [] };
+      } else {
+        const cached = store.openChart(target.patient_id, id);
+        if (!cached.ok) {
+          chart = { ok: false, timeline: [], recentLabs: [], prescriptions: [] };
+        } else {
+          chart = {
+            ok: true,
+            level: cached.level === "emergency" ? "emergency" : "consent",
+            timeline: cached.timeline,
+            recentLabs: cached.recentLabs,
+            prescriptions: store.activePrescriptions(target.patient_id),
+          };
+        }
+      }
     }
   }
 

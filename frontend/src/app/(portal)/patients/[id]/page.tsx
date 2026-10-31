@@ -8,7 +8,7 @@ import { breakGlassAction } from "@/lib/actions";
 import { ageOn, formatDate, GENDER_LABEL } from "@/lib/format";
 import { assessLab } from "@/lib/lab-ranges";
 import { requireSession } from "@/lib/session";
-import { api } from "@/lib/api";
+import { api, apiErrorStatus, type ApiChart } from "@/lib/api";
 import * as store from "@/lib/store";
 
 export const metadata: Metadata = { title: "Patient chart" };
@@ -38,36 +38,43 @@ export default async function ChartPage({
       };
     }
   } catch (err) {
-    console.warn("api.getPatient failed, falling back to local store:", err);
-  }
-  if (!patient) {
-    patient = store.getPatient(id);
+    const status = apiErrorStatus(err);
+    if (status !== 401 && status !== 403) {
+      patient = store.getPatient(id);
+    }
   }
   if (!patient) notFound();
 
-  let hasConsent = false;
+  let bundle: ApiChart | null = null;
+  let denied = false;
   try {
-    const res = await api.checkConsent(id, session.id!);
-    hasConsent = Boolean(res?.has_consent);
+    bundle = await api.getChart(id);
   } catch (err) {
-    console.warn("api.checkConsent failed, checking store:", err);
-    hasConsent = store.hasConsent(id, session.id!);
+    const status = apiErrorStatus(err);
+    if (status === 401 || status === 403) {
+      denied = true;
+    } else {
+      const cached = store.openChart(id, session.id!);
+      if (!cached.ok) denied = true;
+      else {
+        bundle = {
+          patient,
+          timeline: [],
+          labs: [],
+          prescriptions: [],
+          consents: [],
+          access_events: 0,
+          access: cached.level,
+        };
+        (bundle as ApiChart & { _cached?: typeof cached })._cached = cached;
+      }
+    }
   }
-
-  let hasEmergency = false;
-  try {
-    const emRes = await api.checkEmergencyAccess(id, session.id!);
-    hasEmergency = Boolean(emRes?.has_emergency_access);
-  } catch {
-    hasEmergency = store.hasEmergencyAccess(id, session.id!);
-  }
-
-  const isAllowed = hasConsent || hasEmergency;
-  const accessLevel: "consent" | "emergency" | "none" = hasConsent
-    ? "consent"
-    : hasEmergency
+  const accessLevel: "consent" | "emergency" | "none" = !bundle
+    ? "none"
+    : bundle.access === "emergency"
       ? "emergency"
-      : "none";
+      : "consent";
 
   let doctor: any = null;
   let hospitalName = "";
@@ -83,27 +90,6 @@ export default async function ChartPage({
     hospitalName = store.getHospital(doctor.hospital_id)?.hospital_name || "Hospital";
   }
   const today = store.today();
-
-  try {
-    if (!isAllowed) {
-      await api.createAuditEntry({
-        patient_id: id,
-        doctor_id: session.id,
-        action: "DENIED",
-        details: `Access denied: no active consent for ${hospitalName || "hospital"}`,
-      });
-    } else {
-      await api.createAuditEntry({
-        patient_id: id,
-        doctor_id: session.id,
-        action: accessLevel === "emergency" ? "EMERGENCY_READ" : "READ",
-        details: accessLevel === "emergency"
-          ? `Emergency override access at ${hospitalName || "hospital"}`
-          : `Opened unified chart at ${hospitalName || "hospital"}`,
-      });
-    }
-  } catch {}
-
 
   const header = (
     <section className="card patient-head" aria-label="Patient">
@@ -125,7 +111,7 @@ export default async function ChartPage({
     </section>
   );
 
-  if (!isAllowed) {
+  if (denied || !bundle) {
     return (
       <div className="page">
         <PageHeader title="Patient chart" subtitle="Consent required" />
@@ -155,11 +141,11 @@ export default async function ChartPage({
     );
   }
 
-  let timelineEntries: any[] = store.timeline(id);
-  try {
-    const apiTimeline = await api.getTimeline(id);
-    if (apiTimeline && apiTimeline.length > 0) {
-      timelineEntries = apiTimeline.map((t) => ({
+  const cached = (bundle as ApiChart & { _cached?: { timeline: any[]; recentLabs: any[] } })._cached;
+  const now = new Date();
+  const timelineEntries = cached
+    ? cached.timeline
+    : (bundle.timeline || []).map((t) => ({
         visit_id: t.visit_id,
         patient_id: id,
         hospital_id: t.hospital.hospital_id,
@@ -173,15 +159,9 @@ export default async function ChartPage({
         prescriptions: t.prescriptions,
         labs: t.lab_tests,
       }));
-    }
-  } catch {}
-
-  let recentLabsList: any[] = store.recentLabs(id);
-  try {
-    const apiLabs = await api.getPatientLabs(id);
-    if (apiLabs && apiLabs.length > 0) {
-      const now = new Date();
-      recentLabsList = apiLabs.map((l) => {
+  const recentLabsList = cached
+    ? cached.recentLabs
+    : (bundle.labs || []).map((l) => {
         const testD = l.test_date ? new Date(l.test_date) : now;
         const diffDays = Math.max(0, Math.floor((now.getTime() - testD.getTime()) / (1000 * 60 * 60 * 24)));
         return {
@@ -194,8 +174,6 @@ export default async function ChartPage({
           days_ago: diffDays,
         };
       });
-    }
-  } catch {}
 
   const critical = recentLabsList.find((l) => assessLab(l.test_name, l.result).flag === "critical");
 

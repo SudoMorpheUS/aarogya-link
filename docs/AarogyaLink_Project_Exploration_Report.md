@@ -87,9 +87,9 @@ d:\Projects\aarogya-link\
 ## 3. Configuration Analysis
 
 ### 3.1 Docker Compose (`docker-compose.yml`)
-- **`frontend` service**: Builds from `./frontend` using the multi-stage `./frontend/Dockerfile` (Node 22, Next.js standalone output) and exposes port `3000:3000`.
-- **`backend` service**: Builds from `./backend` using `./backend/Dockerfile`, exposes port `8000:8000`, mounts `./backend:/app`, sets `DATABASE_URL: postgresql+psycopg://aarogya:aarogya_dev_password@db:5432/aarogya_db` and `PYTHONUNBUFFERED: "1"`, depends on healthy `db`.
-- **`db` service**: Runs `postgres:17`, creates database `aarogya_db` with user `aarogya`, maps port `5432:5432`, persists storage on volume `postgres_data`, automatically runs `./database/init_migration_001.sql` on startup via `/docker-entrypoint-initdb.d/`.
+- **`frontend` service**: Builds from `./frontend` using the multi-stage `./frontend/Dockerfile` (Node 22, Next.js standalone output) and exposes port `3000:3000`. It receives `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- **`backend` service**: Builds from `./backend` using `./backend/Dockerfile`, exposes port `8000:8000`, mounts `./backend:/app`, and sets `DATABASE_URL` to the Supabase PostgreSQL pooler.
+- There is no database container. Schema and data live in the Supabase project and are loaded from the SQL files under `database/`.
 
 ### 3.2 Backend Configuration
 - **Package Manager**: `uv` with `pyproject.toml`.
@@ -101,7 +101,7 @@ d:\Projects\aarogya-link\
   - `python-dotenv >= 1.0`
 - **Environment (`.env`)**:
   - `DEBUG=true`: Controls exposure of raw SQL debugger.
-  - `DATABASE_URL`: `postgresql+psycopg://aarogya:aarogya_dev_password@localhost:5432/aarogya_db`.
+  - `DATABASE_URL`: required. It must be the Supabase PostgreSQL connection string. Compose sets it for the backend container.
 
 ### 3.3 Frontend Configuration
 - **Location**: `frontend/`.
