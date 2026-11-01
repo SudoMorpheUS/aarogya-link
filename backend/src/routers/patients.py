@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
 
-from ..core.access import actor_from, open_chart, require_roles, same_email
+from ..core.access import actor_from, open_chart, record_access, require_roles, same_email
 from ..core.chart_sql import CHART_SQL
 from ..core.database import get_db
 from ..core.identity import clean_email, find_account
@@ -188,6 +188,8 @@ def get_patient_timeline(
     """Longitudinal history. Consent or a live 30-minute emergency window is required for a doctor."""
     actor = actor_from(request)
     open_chart(db, actor, patient_id)
+    if actor.role == "patient" and actor.id == patient_id:
+        record_access(db, patient_id, None, "VIEW_ALL_RECORDS", "Patient viewed full records list")
     return _load_chart(db, patient_id)["timeline"]
 
 

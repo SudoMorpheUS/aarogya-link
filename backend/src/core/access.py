@@ -64,6 +64,10 @@ def authorize_request(method: str, path: str, actor: Actor) -> None:
         require_roles(actor, "doctor")
         return
 
+    if path.startswith("/panel/"):
+        require_roles(actor, "patient")
+        return
+
     if actor.role == "patient" and path.startswith("/api/patients/"):
         parts = path.split("/")
         if len(parts) >= 4 and parts[3] and parts[3] != actor.id:
@@ -92,8 +96,8 @@ def _has_emergency(db: Session, patient_id: str, doctor_id: str) -> bool:
 
 
 def record_access(db: Session, patient_id: str, doctor_id: str | None, action: str, details: str) -> None:
-    """Append one audit row. The same doctor action inside two minutes is kept once."""
-    if action in {"READ", "DENIED", "EMERGENCY_READ"} and doctor_id:
+    """Append one audit row. The same action inside two minutes is kept once."""
+    if action in {"READ", "DENIED", "EMERGENCY_READ", "VIEW_ALL_RECORDS", "VIEW_VISIT", "VIEW_RESULTS", "VIEW_MEDICINES", "VIEW_CARE_TEAM"}:
         recent_threshold = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=2)
         recent = db.scalar(
             select(AuditLog.log_id)

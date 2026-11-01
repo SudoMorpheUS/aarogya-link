@@ -1,0 +1,40 @@
+<div class="card-head" style="margin-bottom: 12px;">
+  <span class="muted" style="font-size: var(--fs-xs);">
+    Outside the usual range is flagged
+  </span>
+</div>
+{% if labs %}
+<div class="table-wrap">
+  <table class="table">
+    <caption class="sr-only">Latest lab results</caption>
+    <thead>
+      <tr>
+        <th scope="col">Test</th>
+        <th scope="col">Result</th>
+        <th scope="col">Range</th>
+        <th scope="col">Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in labs %}
+      <tr class="{{ 'row-critical' if l.flag == 'critical' else '' }}">
+        <td>{{ l.test_name }}</td>
+        <td style="white-space: nowrap;">{{ l.formatted_result }}</td>
+        <td>
+          {% if l.flag == 'critical' %}
+            <span class="chip chip--critical">Critical {{ l.direction }}</span>
+          {% elif l.flag == 'watch' %}
+            <span class="chip chip--attention">{{ 'Low' if l.direction == 'low' else 'High' }}</span>
+          {% else %}
+            <span class="chip chip--neutral">In range</span>
+          {% endif %}
+        </td>
+        <td style="white-space: nowrap;">{{ l.formatted_date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No lab results yet.</p>
+{% endif %}

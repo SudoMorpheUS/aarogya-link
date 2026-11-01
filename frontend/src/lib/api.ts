@@ -347,6 +347,8 @@ export const api = {
     apiRequest<any>("/api/visits", { method: "POST", body: JSON.stringify(data) }),
   deleteVisit: (id: number) =>
     apiRequest<any>(`/api/visits/${id}`, { method: "DELETE" }),
+  getVisit: (visitId: number) =>
+    apiRequest<ApiTimelineEntry>(`/api/visits/${visitId}`),
   getVisits: (patientId?: string, doctorId?: string) => {
     const params = new URLSearchParams();
     if (patientId) params.append("patient_id", patientId);

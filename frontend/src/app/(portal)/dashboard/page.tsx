@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { MaskedId } from "@/components/MaskedId";
 import { Timeline } from "@/components/Timeline";
+import { DashboardSlideOver } from "@/components/DashboardSlideOver";
 import {
   ActionChip,
   AttentionSummary,
@@ -116,6 +117,27 @@ async function PatientDashboard({ session, showAll }: { session: Session; showAl
   const team = [...new Map(entries.map((e) => [e.doctor_id, e])).values()];
   const last = entries[0];
 
+  const resultsSummary =
+    labs.length === 0
+      ? "No lab results yet"
+      : `${labs.length} result${labs.length === 1 ? "" : "s"}, latest ${formatDate(labs[0].test_date)}`;
+
+  const minDaysLeft = meds.reduce<number | null>((min, m) => {
+    if (typeof m.days_left === "number") {
+      return min === null ? m.days_left : Math.min(min, m.days_left);
+    }
+    return min;
+  }, null);
+  const medicinesSummary =
+    meds.length === 0
+      ? "No medicines in progress"
+      : `${meds.length} active${minDaysLeft !== null ? `, ${minDaysLeft} days left` : ""}`;
+
+  const careTeamSummary =
+    team.length === 0
+      ? "No doctors yet"
+      : `${team.length} doctor${team.length === 1 ? "" : "s"}`;
+
   return (
     <div className="page">
       <section className="band hero-strip" aria-label="Welcome">
@@ -142,92 +164,11 @@ async function PatientDashboard({ session, showAll }: { session: Session; showAl
       </div>
 
       <div className="workspace">
-        <section className="card card-host pane" id="results" aria-labelledby="results-title">
-          <div className="card-head">
-            <h2 id="results-title">Latest results</h2>
-            <span className="muted" style={{ fontSize: "var(--fs-xs)" }}>
-              Outside the usual range is flagged
-            </span>
-          </div>
-          {labs.length === 0 ? (
-            <Empty>No lab results yet.</Empty>
-          ) : (
-            <DataTable
-              caption="Latest lab results"
-              rows={labs.slice(0, 6)}
-              rowKey={(l) => l.lab_test_id}
-              rowClass={(l) => (assessLab(l.test_name, l.result).flag === "critical" ? "row-critical" : undefined)}
-              columns={[
-                { header: "Test", cell: (l) => l.test_name },
-                { header: "Result", cell: (l) => `${l.result ?? "—"} ${l.unit ?? ""}`.trim(), nowrap: true },
-                {
-                  header: "Range",
-                  cell: (l) => {
-                    const a = assessLab(l.test_name, l.result);
-                    return <LabChip flag={a.flag} direction={a.direction} />;
-                  },
-                },
-                { header: "Date", cell: (l) => formatDate(l.test_date), nowrap: true },
-              ]}
-            />
-          )}
-        </section>
-
-        <section className="card card-host pane" id="medicines" aria-labelledby="meds-title">
-          <div className="card-head">
-            <h2 id="meds-title">My medicines</h2>
-          </div>
-          {meds.length === 0 ? (
-            <Empty>No medicines in progress.</Empty>
-          ) : (
-            <ul className="list">
-              {meds.map((m) => (
-                <li key={m.prescription_id}>
-                  <span className="list-row">
-                    <strong className="truncate">
-                      {m.medicine_name} {m.dosage}
-                    </strong>
-                    {typeof m.days_left === "number" && m.days_left <= 14 ? (
-                      <Chip tone="attention">Refill in {m.days_left}d</Chip>
-                    ) : (
-                      <Chip>{typeof m.days_left === "number" ? `${m.days_left} days left` : "Ongoing"}</Chip>
-                    )}
-                  </span>
-                  <span className="muted" style={{ fontSize: "var(--fs-sm)" }}>
-                    {m.frequency} · {m.doctor_name}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="card card-host pane" aria-labelledby="team-title">
-          <div className="card-head">
-            <h2 id="team-title">My care team</h2>
-          </div>
-          {team.length === 0 ? (
-            <Empty>No doctors yet.</Empty>
-          ) : (
-            <ul className="list">
-              {team.map((e) => (
-                <li key={e.doctor_id}>
-                  <span className="flex" style={{ flexWrap: "nowrap" }}>
-                    <Avatar name={e.doctor_name} />
-                    <span style={{ minWidth: 0 }}>
-                      <strong className="truncate" style={{ display: "block" }}>
-                        {e.doctor_name}
-                      </strong>
-                      <span className="muted truncate" style={{ display: "block", fontSize: "var(--fs-sm)" }}>
-                        {store.getDoctor(e.doctor_id)?.specialization || "Physician"} · {e.hospital_name}
-                      </span>
-                    </span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
+        <DashboardSlideOver
+          resultsSummary={resultsSummary}
+          medicinesSummary={medicinesSummary}
+          careTeamSummary={careTeamSummary}
+        />
 
         <section className="card card-host pane" aria-labelledby="profile-title">
           <div className="card-head">
@@ -255,8 +196,13 @@ async function PatientDashboard({ session, showAll }: { session: Session; showAl
       </div>
 
       <section aria-labelledby="timeline-title" className="stack-sm">
-        <h2 id="timeline-title">Your timeline</h2>
-        <Timeline entries={entries} />
+        <div className="card-head" style={{ marginBottom: "var(--sp-xs)" }}>
+          <h2 id="timeline-title" style={{ margin: 0 }}>Your timeline</h2>
+          <Link href="/records" className="btn btn--secondary btn--sm">
+            View all records →
+          </Link>
+        </div>
+        <Timeline entries={entries.slice(0, 3)} clickable={true} />
       </section>
     </div>
   );

@@ -12,7 +12,18 @@ from ..models.audit_log import AuditLog
 from ..models.doctor import Doctor
 from ..models.patient import Patient
 
-CLIENT_ACTIONS = {"READ", "DENIED", "EMERGENCY_READ", "CONSENT_CHANGE", "VIEW_TIMELINE"}
+CLIENT_ACTIONS = {
+    "READ",
+    "DENIED",
+    "EMERGENCY_READ",
+    "CONSENT_CHANGE",
+    "VIEW_TIMELINE",
+    "VIEW_ALL_RECORDS",
+    "VIEW_VISIT",
+    "VIEW_RESULTS",
+    "VIEW_MEDICINES",
+    "VIEW_CARE_TEAM",
+}
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
@@ -140,13 +151,16 @@ def create_audit_entry(payload: dict[str, Any], request: Request, db: Session = 
                 raise HTTPException(status_code=403, detail="A read is recorded only when you can open the chart")
             if action == "EMERGENCY_READ" and not has_emergency:
                 raise HTTPException(status_code=403, detail="An emergency read is recorded only inside the 30-minute window")
+    elif actor.role == "patient":
+        if patient_id != actor.id:
+            raise HTTPException(status_code=403, detail="You can only record events for your own patient ID")
     elif actor.role != "admin":
         raise HTTPException(status_code=403, detail="Access events are recorded when a chart is opened")
     if not patient_id:
         raise HTTPException(status_code=400, detail="patient_id is required")
 
-    # Debounce duplicate READ / DENIED logs from the same doctor for the same patient within the last 2 minutes
-    if action in ("READ", "DENIED", "EMERGENCY_READ") and patient_id and doctor_id:
+    # Debounce duplicate logs for the same patient within the last 2 minutes
+    if action in ("READ", "DENIED", "EMERGENCY_READ", "VIEW_ALL_RECORDS", "VIEW_VISIT") and patient_id:
         recent_threshold = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=2)
         recent_log = db.scalar(
             select(AuditLog)

@@ -2497,3 +2497,123 @@ dialog.modal::backdrop {
     animation-delay: 0.8s !important;
   }
 }
+
+/* ---------- Dashboard slide-over panel & buttons ---------- */
+
+.dashboard-panel-btn {
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+.dashboard-panel-btn:hover {
+  border-color: var(--blue-300);
+  box-shadow: var(--shadow-2);
+}
+
+.dashboard-panel-btn:focus-visible {
+  outline: 3px solid var(--blue-300);
+  outline-offset: 2px;
+}
+
+#panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+  backdrop-filter: blur(2px);
+  transition: opacity 200ms ease-out;
+}
+
+#panel-backdrop[hidden] {
+  display: none !important;
+}
+
+#side-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: 100dvh;
+  width: min(480px, 100vw);
+  background: var(--white);
+  color: var(--ink-900);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-2);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(0);
+  transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#side-panel[hidden] {
+  display: none !important;
+}
+
+#side-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pad);
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+#side-panel-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--ink-900);
+}
+
+#side-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--ink-600);
+  font-size: 24px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--r-input);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#side-panel-close:hover {
+  background: var(--blue-50);
+  color: var(--ink-900);
+}
+
+#side-panel-close:focus-visible {
+  outline: 3px solid var(--blue-300);
+  outline-offset: 2px;
+}
+
+#side-panel-body {
+  padding: var(--pad);
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+@media (max-width: 640px) {
+  #side-panel {
+    width: 100vw;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #side-panel {
+    transition: none !important;
+  }
+  #panel-backdrop {
+    transition: none !important;
+  }
+}

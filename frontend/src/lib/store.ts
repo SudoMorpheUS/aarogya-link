@@ -390,6 +390,20 @@ export function timeline(patientId: string): TimelineEntry[] {
     }));
 }
 
+export function getVisit(visitId: number): TimelineEntry | null {
+  const s = db();
+  const v = s.visits.find((x) => x.visit_id === visitId);
+  if (!v) return null;
+  return {
+    ...v,
+    hospital_name: getHospital(v.hospital_id)?.hospital_name ?? v.hospital_id,
+    doctor_name: getDoctor(v.doctor_id)?.full_name ?? v.doctor_id,
+    diagnoses: s.diagnoses.filter((d) => d.visit_id === v.visit_id),
+    prescriptions: s.prescriptions.filter((p) => p.visit_id === v.visit_id),
+    labs: s.labTests.filter((l) => l.visit_id === v.visit_id),
+  };
+}
+
 // ---------- duplicate test check ----------
 
 export interface RecentLab extends LabTest {

@@ -4,11 +4,13 @@ import datetime
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
-from ..core.access import actor_from, assert_may_treat, open_chart, require_roles
+from ..core.access import actor_from, assert_may_treat, open_chart, record_access, require_roles
 from ..core.database import get_db
 from ..models.doctor import Doctor
+from ..models.hospital import Hospital
+from ..models.patient import Patient
 from ..models.visit import Diagnosis, LabTest, Prescription, Visit
 
 router = APIRouter(prefix="/api/visits", tags=["visits"])
@@ -153,6 +155,95 @@ def list_visits(
             "chief_complaint": v.chief_complaint,
         })
     return results
+
+
+@router.get("/{visit_id}")
+def get_visit_detail(visit_id: int, request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Return full details for a single clinical encounter.
+
+    Ownership and consent are strictly enforced:
+    - Patient can only see their own visit (returns 404 if not found or not owned).
+    - Doctor requires active consent or emergency override.
+    - Admin can view any visit.
+    - An audit log entry is recorded for every view.
+    """
+    actor = actor_from(request)
+    stmt = (
+        select(Visit)
+        .where(Visit.visit_id == visit_id)
+        .options(
+            joinedload(Visit.hospital),
+            joinedload(Visit.doctor),
+            joinedload(Visit.patient),
+            selectinload(Visit.diagnoses),
+            selectinload(Visit.prescriptions),
+            selectinload(Visit.lab_tests),
+        )
+    )
+    visit = db.scalar(stmt)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Visit not found")
+
+    if actor.role == "patient":
+        if visit.patient_id != actor.id:
+            # Per security spec: return 404 so caller cannot probe whether ID exists
+            raise HTTPException(status_code=404, detail="Visit not found")
+        record_access(db, visit.patient_id, None, "VIEW_VISIT", f"Patient opened visit #{visit_id}")
+    elif actor.role == "doctor":
+        open_chart(db, actor, visit.patient_id)
+        record_access(db, visit.patient_id, actor.id, "READ", f"Doctor opened visit #{visit_id}")
+    elif actor.role == "admin":
+        record_access(db, visit.patient_id, None, "READ", f"Administrator opened visit #{visit_id}")
+    else:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return {
+        "visit_id": visit.visit_id,
+        "patient_id": visit.patient_id,
+        "patient_name": visit.patient.full_name if visit.patient else "",
+        "visit_date": visit.visit_date.isoformat() if visit.visit_date else "",
+        "visit_type": visit.visit_type,
+        "chief_complaint": visit.chief_complaint,
+        "hospital": {
+            "hospital_id": visit.hospital.hospital_id if visit.hospital else visit.hospital_id,
+            "hospital_name": visit.hospital.hospital_name if visit.hospital else "Hospital",
+            "address": visit.hospital.address if visit.hospital else "",
+        },
+        "doctor": {
+            "doctor_id": visit.doctor.doctor_id if visit.doctor else visit.doctor_id,
+            "full_name": visit.doctor.full_name if visit.doctor else "Doctor",
+            "specialization": visit.doctor.specialization if visit.doctor else "Physician",
+        },
+        "diagnoses": [
+            {
+                "diagnosis_id": d.diagnosis_id,
+                "disease_code": d.disease_code,
+                "description": d.description,
+                "diagnosed_date": d.diagnosed_date.isoformat() if d.diagnosed_date else "",
+            }
+            for d in visit.diagnoses
+        ],
+        "prescriptions": [
+            {
+                "prescription_id": p.prescription_id,
+                "medicine_name": p.medicine_name,
+                "dosage": p.dosage,
+                "frequency": p.frequency,
+                "duration": p.duration,
+            }
+            for p in visit.prescriptions
+        ],
+        "lab_tests": [
+            {
+                "lab_test_id": l.lab_test_id,
+                "test_name": l.test_name,
+                "result": l.result,
+                "unit": l.unit,
+                "test_date": l.test_date.isoformat() if l.test_date else "",
+            }
+            for l in visit.lab_tests
+        ],
+    }
 
 
 @router.delete("/{visit_id}")

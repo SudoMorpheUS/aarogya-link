@@ -17,6 +17,7 @@ from src.routers.doctors import router as doctors_router
 from src.routers.duplicates import router as duplicates_router
 from src.routers.hospitals import router as hospitals_router
 from src.routers.patients import router as patients_router
+from src.routers.panel import router as panel_router
 from src.routers.stats import router as stats_router
 from src.routers.visits import router as visits_router
 
@@ -109,13 +110,14 @@ app.add_middleware(
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Aarogya-Session"],
+    allow_headers=["Authorization", "Content-Type", "X-Aarogya-Session", "X-Requested-With"],
 )
 
 # Register routers
 app.include_router(hospitals_router)
 app.include_router(doctors_router)
 app.include_router(patients_router)
+app.include_router(panel_router)
 app.include_router(consents_router)
 app.include_router(visits_router)
 app.include_router(audit_router)

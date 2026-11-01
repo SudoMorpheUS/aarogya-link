@@ -1,0 +1,21 @@
+{% if team %}
+<ul class="list">
+  {% for doc in team %}
+  <li>
+    <span class="flex" style="flex-wrap: nowrap;">
+      <span class="avatar" aria-hidden="true">{{ doc.initials }}</span>
+      <span style="min-width: 0;">
+        <strong class="truncate" style="display: block;">
+          {{ doc.doctor_name }}
+        </strong>
+        <span class="muted truncate" style="display: block; font-size: var(--fs-sm);">
+          {{ doc.specialization or "Physician" }} · {{ doc.hospital_name }}
+        </span>
+      </span>
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No doctors yet.</p>
+{% endif %}

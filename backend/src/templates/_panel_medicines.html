@@ -1,0 +1,25 @@
+{% if meds %}
+<ul class="list">
+  {% for m in meds %}
+  <li>
+    <span class="list-row">
+      <strong class="truncate">
+        {{ m.medicine_name }} {{ m.dosage }}
+      </strong>
+      {% if m.days_left is not none and m.days_left <= 14 %}
+        <span class="chip chip--attention">Refill in {{ m.days_left }}d</span>
+      {% elif m.days_left is not none %}
+        <span class="chip">{{ m.days_left }} days left</span>
+      {% else %}
+        <span class="chip">Ongoing</span>
+      {% endif %}
+    </span>
+    <span class="muted" style="font-size: var(--fs-sm);">
+      {{ m.frequency }} · {{ m.doctor_name }}
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No medicines in progress.</p>
+{% endif %}
