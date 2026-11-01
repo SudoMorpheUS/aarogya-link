@@ -42,7 +42,7 @@ VALUES
   ('PAT-IN-1004', 'Rajesh Patel', '1981-01-09', 'M', 'AB+', '9725019988', 'rajesh.patel@example.in'),
   ('PAT-IN-1005', 'Meera Nair', '1955-05-30', 'F', 'O-', '9447012233', 'meera.nair@example.in'),
   ('PAT-IN-1006', 'Devansh Gupta', '2007-09-14', 'M', 'B-', '9876543210', 'devansh.gupta@example.in'),
-  ('PAT-IN-105001', 'Mudit Jha', '1998-04-12', 'M', 'O+', '9876500105', 'mudit@gmail.com')
+  ('PAT-IN-105001', 'Archit Singh', '1998-04-12', 'M', 'O+', '9876500105', 'archit@gmail.com')
 ON CONFLICT (patient_id) DO UPDATE SET
   full_name = EXCLUDED.full_name,
   date_of_birth = EXCLUDED.date_of_birth,
@@ -91,7 +91,7 @@ BEGIN
     VALUES (new_vid, 'TSH', '5.2', 'mIU/L', '2026-07-03');
   END IF;
 
-  -- Mudit Jha (PAT-IN-105001): cardiology follow-up with Dr. Rohan Mehta at Apollo
+  -- Archit Singh (PAT-IN-105001) Visit 1: cardiology follow-up with Dr. Rohan Mehta at Apollo Hospitals Chennai
   IF NOT EXISTS (SELECT 1 FROM visit WHERE patient_id = 'PAT-IN-105001' AND doctor_id = 'DOC-01') THEN
     INSERT INTO visit (patient_id, hospital_id, doctor_id, visit_date, visit_type, chief_complaint)
     VALUES ('PAT-IN-105001', 'HSP1001', 'DOC-01', '2026-09-08 11:00:00', 'OPD', 'Palpitations and mild chest discomfort')
@@ -106,6 +106,41 @@ BEGIN
     INSERT INTO lab_test (visit_id, test_name, result, unit, test_date)
     VALUES (new_vid, 'ECG', 'Sinus tachycardia', NULL, '2026-09-08'),
            (new_vid, 'TSH', '2.1', 'mIU/L', '2026-09-08');
+  END IF;
+
+  -- Archit Singh (PAT-IN-105001) Visit 2: internal medicine review with Dr. Nisha Kapoor at Fortis Healthcare Bengaluru
+  IF NOT EXISTS (SELECT 1 FROM visit WHERE patient_id = 'PAT-IN-105001' AND doctor_id = 'DOC-04') THEN
+    INSERT INTO visit (patient_id, hospital_id, doctor_id, visit_date, visit_type, chief_complaint)
+    VALUES ('PAT-IN-105001', 'HSP1002', 'DOC-04', '2026-10-05 14:30:00', 'OPD', 'Metabolic health review and chronic fatigue')
+    RETURNING visit_id INTO new_vid;
+
+    INSERT INTO diagnosis (visit_id, disease_code, description, diagnosed_date)
+    VALUES (new_vid, 'E11.9', 'Type 2 diabetes mellitus without complications', '2026-10-05');
+
+    INSERT INTO prescription (visit_id, medicine_name, dosage, frequency, duration)
+    VALUES (new_vid, 'Metformin', '500 mg', 'Twice daily with meals', '60 days');
+
+    INSERT INTO lab_test (visit_id, test_name, result, unit, test_date)
+    VALUES (new_vid, 'HbA1c', '6.5', '%', '2026-10-05'),
+           (new_vid, 'Fasting Glucose', '126', 'mg/dL', '2026-10-05');
+  END IF;
+
+  -- Archit Singh (PAT-IN-105001) Visit 3: orthopedic trauma emergency with Dr. Vikram Sharma at AIIMS New Delhi
+  IF NOT EXISTS (SELECT 1 FROM visit WHERE patient_id = 'PAT-IN-105001' AND doctor_id = 'DOC-05') THEN
+    INSERT INTO visit (patient_id, hospital_id, doctor_id, visit_date, visit_type, chief_complaint)
+    VALUES ('PAT-IN-105001', 'HSP1005', 'DOC-05', '2026-10-20 09:15:00', 'Emergency', 'Acute right knee twisting injury during football match')
+    RETURNING visit_id INTO new_vid;
+
+    INSERT INTO diagnosis (visit_id, disease_code, description, diagnosed_date)
+    VALUES (new_vid, 'S83.5', 'Sprain and strain of anterior cruciate ligament of knee', '2026-10-20');
+
+    INSERT INTO prescription (visit_id, medicine_name, dosage, frequency, duration)
+    VALUES (new_vid, 'Aceclofenac + Paracetamol', '100mg/325mg', 'Twice daily after meals', '7 days'),
+           (new_vid, 'Pantoprazole', '40 mg', 'Once daily before breakfast', '7 days');
+
+    INSERT INTO lab_test (visit_id, test_name, result, unit, test_date)
+    VALUES (new_vid, 'Knee X-Ray', 'Soft tissue swelling, no fracture', NULL, '2026-10-20'),
+           (new_vid, 'Serum Uric Acid', '4.8', 'mg/dL', '2026-10-20');
   END IF;
 
   -- Karthik Iyer (PAT-IN-1002) Visit 3

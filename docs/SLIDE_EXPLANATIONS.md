@@ -222,11 +222,11 @@
   * Sign-in is Supabase Authentication. The API maps the email to one role and sets an httpOnly session cookie.
 * **Technical Details:**  
   * **Database:** Hosted Supabase project `izgtbzxrruajihrbxzyx`, region `ap-southeast-2`. The backend uses the Supabase pooler through `DATABASE_URL` in `docker-compose.yml`.
-  * **Schema load order in the Supabase SQL editor:** `database/init_migration_001.sql`, `database/initial_mock_data_load_fixed.sql`, `database/seed_demo_consents.sql`, `database/rls_policies.sql`.
+  * **Schema load order in the Supabase SQL editor:** `database/init_migration_001.sql`, `database/initial_mock_data_load_fixed.sql`, `database/seed_demo_consents.sql`, `database/rls_policies.sql`, `database/perf_and_audit.sql`, and `database/check_rls.sql`.
   * **Start command:** `docker compose up -d --build`. Frontend at `http://localhost:3000`. API at `http://localhost:8000`.
   * **Row Level Security** is installed by `database/rls_policies.sql`. The synthetic seed is the evaluation dataset already loaded in that project.
 * **What to Say (Speaking Script):**  
-  > "The database is PostgreSQL 17 on Supabase. Docker runs the website and the API on this laptop, and both of them connect to that hosted database. Accounts are created in Supabase Authentication. After sign-in, the API looks up the email in patient, doctor, or admin_user and issues a signed session cookie. The schema, seed data, demo consents, and row-level security policies are the four SQL files we run in the Supabase SQL editor."
+  > "The database is PostgreSQL 17 on Supabase. Docker runs the website and the API on this laptop, and both of them connect to that hosted database. Accounts are created in Supabase Authentication. After sign-in, the API looks up the email in patient, doctor, or admin_user and issues a signed session cookie. The schema, seed data, demo consents, row-level security policies, and performance/audit scripts are the SQL files we run in the Supabase SQL editor."
 
 ---
 
@@ -234,19 +234,26 @@
 * **Slide Text:**  
   * Indexing and query optimization strategies for rapid retrieval.
 * **Technical Implementation:**
-  Four targeted B-Tree indexes defined in [`database/init_migration_001.sql`](file:///d:/Projects/DBMS/arogya-link_new/arogya-link_new/arogya-link/database/init_migration_001.sql#L99-L104):
+  Eight targeted B-Tree indexes defined across [`database/init_migration_001.sql`](file:///d:/Projects/DBMS/arogya-link_new/arogya-link_new/arogya-link/database/init_migration_001.sql#L99-L104) and [`database/perf_and_audit.sql`](file:///d:/Projects/DBMS/arogya-link_new/arogya-link_new/arogya-link/database/perf_and_audit.sql#L4-L7):
   ```sql
+  -- Access path indexes
   CREATE INDEX IF NOT EXISTS idx_visit_patient ON visit(patient_id);
   CREATE INDEX IF NOT EXISTS idx_consent_patient_status ON consent(patient_id, status);
   CREATE INDEX IF NOT EXISTS idx_lab_test_name_date ON lab_test(test_name, test_date);
   CREATE INDEX IF NOT EXISTS idx_audit_patient_time ON audit_log(patient_id, action_time DESC);
+
+  -- Chart load & temporal composite indexes
+  CREATE INDEX IF NOT EXISTS idx_diagnosis_visit ON diagnosis(visit_id);
+  CREATE INDEX IF NOT EXISTS idx_prescription_visit ON prescription(visit_id);
+  CREATE INDEX IF NOT EXISTS idx_lab_test_visit ON lab_test(visit_id);
+  CREATE INDEX IF NOT EXISTS idx_visit_patient_date ON visit(patient_id, visit_date DESC);
   ```
-  * **`idx_visit_patient`:** Eliminates sequential scans when assembling a patient's historical medical timeline, converting an $O(N)$ table scan into an $O(\log N)$ index scan.
-  * **`idx_consent_patient_status`:** Optimizes the `fn_has_consent` stored function by rapidly filtering for `'Active'` consents belonging to a patient.
+  * **`idx_visit_patient` & `idx_visit_patient_date`:** Eliminates sequential scans when assembling a patient's historical medical timeline, converting an $O(N)$ table scan into an $O(\log N)$ index scan (**2.5× speedup**: 0.211 ms → 0.083 ms).
+  * **`idx_consent_patient_status`:** Optimizes the `fn_has_consent` stored function by rapidly filtering for `'Active'` consents belonging to a patient (**6.5× speedup**: 0.378 ms → 0.058 ms).
+  * **`idx_audit_patient_time`:** Accelerates descending chronological audit retrieval for the compliance log (**12.2× speedup**: 0.550 ms → 0.045 ms).
   * **`idx_lab_test_name_date`:** Accelerates duplicate lab test detection by indexing test names and chronological dates.
-  * **`idx_audit_patient_time`:** Accelerates descending chronological audit retrieval for the compliance log.
 * **What to Say (Speaking Script):**  
-  > "To ensure sub-millisecond retrieval speeds across thousands of encounters, we designed four strategic B-tree indexes. For example, `idx_visit_patient` ensures that when a doctor pulls up a patient's history, PostgreSQL executes an index scan rather than a full table scan. Similarly, our composite index on `(patient_id, status)` optimizes our consent verification function so that permission checks add virtually zero latency to API calls."
+  > "To ensure sub-millisecond retrieval speeds across thousands of encounters, we designed targeted B-tree and composite indexes. Our performance benchmark on Supabase proves significant gains: patient timeline queries run 2.5 times faster, consent checks run 6.5 times faster, and compliance audit log scans run over 12 times faster, dropping from 0.55 milliseconds down to 0.045 milliseconds."
 
 ---
 
@@ -292,15 +299,15 @@
 
 ### Slide 16: Patient Dashboard & Consent Ownership
 * **Slide Visual:**  
-  Live screenshot of `localhost:3000/dashboard` under Patient Mudit.
+  Live screenshot of `localhost:3000/dashboard` under Patient Archit Singh.
 * **UI & Technical Highlights:**
-  * **Personal Health Overview:** 1 Visit, 1 Hospital, 2 Active Consents, 1 Access Event.
-  * **Diagnostic Summary:** Latest lab tests (ECG: Sinus tachycardia, TSH: 2.1 mIU/L).
-  * **Active Medications:** Metoprolol 25 mg twice daily prescribed by Dr. Rohan Mehta.
-  * **Consent Transparency Card:** Displays exactly which doctors and hospitals currently hold active access permissions (`Dr. Rohan Mehta until 22 Oct 2027`, `Apollo Hospitals until 22 Oct 2027`).
-  * **Access Audit Feed:** Real-time transparency showing that Dr. Rohan Mehta performed a clinical read on 22 Oct 2026 at 06:02.
+  * **Personal Health Overview:** Unified longitudinal care aggregating 3 Visits across 3 Hospitals (Apollo, Fortis, AIIMS), 6 Active Consents, and full access history.
+  * **Diagnostic Summary:** Latest lab tests spanning multiple specialties (ECG: Sinus tachycardia & TSH at Apollo; HbA1c & Fasting Glucose at Fortis; Knee X-Ray & Uric Acid at AIIMS).
+  * **Active Medications:** Metoprolol 25 mg (Cardiology, Apollo), Metformin 500 mg (Internal Medicine, Fortis), Aceclofenac + Paracetamol (Orthopedics, AIIMS).
+  * **Consent Transparency Card:** Displays exactly which doctors and hospitals currently hold active access permissions (`Apollo Hospitals`, `Fortis Healthcare`, `AIIMS New Delhi`, `Dr. Rohan Mehta`, `Dr. Nisha Kapoor`, `Dr. Vikram Sharma`).
+  * **Access Audit Feed:** Real-time transparency showing clinician reads and consent grants across the national network.
 * **What to Say (Speaking Script):**  
-  > "The Patient Dashboard empowers the citizen. Here, the patient can see their complete diagnostic history, active medications, and care team in one view. Crucially, the right-hand panel gives them complete transparency: it lists every doctor and hospital that holds an active consent grant, along with an audit feed showing exactly who looked at their medical chart and when."
+  > "The Patient Dashboard empowers the citizen with a truly unified longitudinal health record. Here as Archit Singh, we can observe my medical encounters across three completely independent hospital networks: Apollo Hospitals in Chennai, Fortis Healthcare in Bengaluru, and AIIMS in New Delhi—all consolidated under a single national patient ID (`PAT-IN-105001`). Crucially, the right-hand panel gives complete transparency: it lists every doctor and hospital holding active consent, alongside an immutable audit trail showing who opened my chart."
 
 ---
 
@@ -359,12 +366,12 @@
 * **Slide Visual:**  
   pgAdmin 4 query: `SELECT * FROM public.audit_log ORDER BY log_id ASC LIMIT 100;`
 * **Schema & Output:**
-  * Columns: `log_id` (PK, Serial), `patient_id` (FK), `doctor_id` (FK), `action`, `action_time`, `details`.
-  * Rows show actions: `VISIT_CREATED`, `DATA_VIEWED`, `EMERGENCY_OVERRIDE`, `CONSENT_CHANGE`.
+  * Columns: `log_id` (PK, Serial), `patient_id` (FK), `doctor_id` (FK), `action`, `action_time`, `details`, `prev_hash`, `entry_hash`.
+  * Rows show actions: `READ`, `INSERT`, `DENIED`, `EMERGENCY_READ`.
 * **Technical Point:**  
-  Append-only ledger. No `UPDATE` or `DELETE` endpoints exist in the application layer for this table.
+  Append-only ledger protected by database trigger `trg_audit_immutable` (rejects any `UPDATE` or `DELETE`) and cryptographically sealed row-by-row using SHA-256 hash chaining (`trg_audit_seal`).
 * **What to Say (Speaking Script):**  
-  > "Here is our append-only `audit_log` table. Every chart access and clinical event is automatically logged with timestamps, patient ID, doctor ID, and descriptive details. This provides legal non-repudiation and transparency."
+  > "Here is our append-only `audit_log` table. Every chart access, visit creation, denied attempt, and break-glass emergency read is logged in real time. Notice the `prev_hash` and `entry_hash` columns: each entry cryptographically signs its payload with the preceding entry's SHA-256 hash under an advisory transaction lock. Any modification attempt is immediately aborted by our `trg_audit_immutable` database trigger, providing tamper-evident non-repudiation."
 
 ---
 

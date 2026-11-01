@@ -45,6 +45,8 @@ erDiagram
         varchar(100) full_name
         varchar(80) specialization
         varchar(30) license_number UK
+        varchar(100) email
+        varchar(15) contact_number
     }
 
     VISIT {
@@ -100,6 +102,14 @@ erDiagram
         varchar(30) action
         timestamp action_time
         text details
+        text prev_hash
+        text entry_hash
+    }
+
+    ADMIN_USER {
+        varchar(100) email PK
+        varchar(100) full_name
+        timestamp created_at
     }
 ```
 
@@ -167,6 +177,8 @@ Stores credentialed clinicians affiliated with hospitals.
 | `full_name` | `VARCHAR(100)` | `NOT NULL` | Physician's full name |
 | `specialization`| `VARCHAR(80)` | `NOT NULL` | Medical department / specialty |
 | `license_number`| `VARCHAR(30)` | **UNIQUE**, `NOT NULL` | State/National Medical Council registration |
+| `email` | `VARCHAR(100)` | Nullable | Clinician email |
+| `contact_number`| `VARCHAR(15)` | Nullable | Direct contact number |
 
 ```sql
 CREATE TABLE doctor (
@@ -174,7 +186,9 @@ CREATE TABLE doctor (
   hospital_id    VARCHAR(15)  NOT NULL REFERENCES hospital(hospital_id),
   full_name      VARCHAR(100) NOT NULL,
   specialization VARCHAR(80)  NOT NULL,
-  license_number VARCHAR(30)  UNIQUE NOT NULL
+  license_number VARCHAR(30)  UNIQUE NOT NULL,
+  email          VARCHAR(100),
+  contact_number VARCHAR(15)
 );
 ```
 
@@ -324,6 +338,8 @@ Immutable, tamper-evident audit ledger capturing every access attempt, chart rea
 | `action` | `VARCHAR(30)` | `NOT NULL` | `READ`, `INSERT`, `EMERGENCY_READ`, `DENIED`, etc. |
 | `action_time` | `TIMESTAMP` | `NOT NULL DEFAULT NOW()` | Tamper-proof transaction timestamp |
 | `details` | `TEXT` | Nullable | Contextual information or emergency justification |
+| `prev_hash` | `TEXT` | Nullable | SHA-256 hash of preceding row (blockchain link) |
+| `entry_hash` | `TEXT` | Nullable | SHA-256 seal of current row payload + `prev_hash` |
 
 ```sql
 CREATE TABLE audit_log (
@@ -332,7 +348,28 @@ CREATE TABLE audit_log (
   doctor_id   VARCHAR(15) REFERENCES doctor(doctor_id),
   action      VARCHAR(30) NOT NULL,
   action_time TIMESTAMP   NOT NULL DEFAULT NOW(),
-  details     TEXT
+  details     TEXT,
+  prev_hash   TEXT,
+  entry_hash  TEXT
+);
+```
+
+---
+
+### 2.10. `admin_user`
+Central platform administrators with network-wide compliance oversight.
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `email` | `VARCHAR(100)` | **PRIMARY KEY** | Unique administrative login email |
+| `full_name` | `VARCHAR(100)` | `NOT NULL` | Full name of administrator |
+| `created_at` | `TIMESTAMP` | `NOT NULL DEFAULT NOW()` | Account creation timestamp |
+
+```sql
+CREATE TABLE admin_user (
+  email      VARCHAR(100) PRIMARY KEY,
+  full_name  VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -432,6 +469,97 @@ AFTER INSERT ON visit
 FOR EACH ROW EXECUTE FUNCTION trg_visit_audit();
 ```
 
+### 4.3. Append-Only Cryptographic Sealing Triggers (`trg_audit_seal` & `trg_audit_immutable`)
+Defined in `database/perf_and_audit.sql`. Links audit entries into an immutable SHA-256 hash chain:
+```sql
+CREATE OR REPLACE FUNCTION trg_audit_seal() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+    prev TEXT;
+    payload TEXT;
+BEGIN
+    PERFORM pg_advisory_xact_lock(871234);
+    SELECT entry_hash INTO prev FROM audit_log ORDER BY log_id DESC LIMIT 1;
+    NEW.prev_hash := COALESCE(prev, 'GENESIS');
+    payload := concat_ws(
+        '|',
+        COALESCE(NEW.patient_id, ''),
+        COALESCE(NEW.doctor_id, ''),
+        COALESCE(NEW.action, ''),
+        COALESCE(NEW.action_time::text, ''),
+        COALESCE(NEW.details, ''),
+        NEW.prev_hash
+    );
+    NEW.entry_hash := encode(sha256(convert_to(payload, 'UTF8')), 'hex');
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_audit_immutable() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_log is append-only';
+END;
+$$;
+
+CREATE TRIGGER tr_audit_seal BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION trg_audit_seal();
+CREATE TRIGGER tr_audit_immutable BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION trg_audit_immutable();
+```
+
+### 4.4. Analytical Views
+- **Cross-Hospital Duplicate Lab Test Detection View (`v_duplicate_lab_tests`)**:
+  ```sql
+  CREATE OR REPLACE VIEW v_duplicate_lab_tests AS
+  SELECT 
+      lt1.lab_test_id AS initial_test_id,
+      lt1.test_name,
+      lt1.test_date AS initial_date,
+      v1.patient_id,
+      v1.hospital_id AS initial_hospital_id,
+      lt2.lab_test_id AS duplicate_test_id,
+      lt2.test_date AS duplicate_date,
+      v2.hospital_id AS duplicate_hospital_id,
+      (lt2.test_date - lt1.test_date) AS days_between
+  FROM lab_test lt1
+  JOIN visit v1 ON lt1.visit_id = v1.visit_id
+  JOIN lab_test lt2 ON lt1.test_name = lt2.test_name AND lt1.lab_test_id < lt2.lab_test_id
+  JOIN visit v2 ON lt2.visit_id = v2.visit_id AND v1.patient_id = v2.patient_id
+  WHERE v1.hospital_id <> v2.hospital_id
+    AND lt2.test_date >= lt1.test_date
+    AND lt2.test_date - lt1.test_date <= 90;
+  ```
+- **Privacy-Preserving Doctor Directory View (`v_doctor_directory`)**:
+  Owned by `postgres` (`security_invoker = false`) to let authenticated patients view doctor names, specializations, and hospital affiliations without exposing private email or phone numbers:
+  ```sql
+  CREATE OR REPLACE VIEW v_doctor_directory WITH (security_invoker = false) AS
+  SELECT d.doctor_id, d.hospital_id, d.full_name, d.specialization, d.license_number,
+         h.hospital_name, h.address AS hospital_address
+  FROM doctor d JOIN hospital h ON h.hospital_id = d.hospital_id;
+  ```
+
+### 4.5. Strategic B-Tree Indexes & Benchmark Latencies
+```sql
+-- High-frequency access path indexes (init_migration_001.sql)
+CREATE INDEX IF NOT EXISTS idx_visit_patient ON visit(patient_id);
+CREATE INDEX IF NOT EXISTS idx_consent_patient_status ON consent(patient_id, status);
+CREATE INDEX IF NOT EXISTS idx_lab_test_name_date ON lab_test(test_name, test_date);
+CREATE INDEX IF NOT EXISTS idx_audit_patient_time ON audit_log(patient_id, action_time DESC);
+
+-- Composite chart-load indexes (perf_and_audit.sql)
+CREATE INDEX IF NOT EXISTS idx_diagnosis_visit ON diagnosis(visit_id);
+CREATE INDEX IF NOT EXISTS idx_prescription_visit ON prescription(visit_id);
+CREATE INDEX IF NOT EXISTS idx_lab_test_visit ON lab_test(visit_id);
+CREATE INDEX IF NOT EXISTS idx_visit_patient_date ON visit(patient_id, visit_date DESC);
+```
+
+#### Query Execution Benchmark (Supabase PostgreSQL snapshot — 701 patients, 1,324 visits)
+| Query | Without indexes (ms) | With indexes (ms) | Speed-up | Plan with indexes |
+| :--- | :---: | :---: | :---: | :--- |
+| **Patient timeline** | 0.211 | 0.083 | **2.5×** | Index Scan on `idx_visit_patient` |
+| **Active consents** | 0.378 | 0.058 | **6.5×** | Bitmap Index Scan on `idx_consent_patient_status` |
+| **Duplicate-test view** | 3.915 | 3.798 | 1.0× | Sequential scans + hash joins |
+| **Audit trail** | 0.550 | 0.045 | **12.2×** | Index Scan on `idx_audit_patient_time` |
+
 ---
 
 ## 5. How to Add a Patient in the Admin Dashboard
@@ -481,22 +609,25 @@ When an administrator registers a patient:
 
 ---
 
-## 6. Row Level Security (Supabase)
+## 6. Migration Execution Order & Row Level Security (Supabase)
 
-`database/init_migration_001.sql` creates the schema. RLS is installed separately by
-`database/rls_policies.sql`, which is safe to re-run. It enables **and forces** RLS on
-every public table, recreates the helper functions as `SECURITY DEFINER`, and adds:
+The live database runs on hosted Supabase PostgreSQL. Migration scripts must be applied in the Supabase SQL Editor in the following order:
 
-- patient self-access and self-management of consent;
-- doctor access to patients/visits/diagnosis/prescription/lab-test data only when an
-  active consent names the doctor **or their hospital**;
-- hospital-wide consent visibility for doctors;
-- admin full access, service-role bypass policies, and no `anon` table access;
-- append-only audit rows for normal users;
-- a safe `v_doctor_directory` view for doctor name/specialty lookups without exposing
-  doctor email or contact details.
+1. `database/init_migration_001.sql`: Core schema (10 BCNF tables, views, stored functions, initial triggers, and indexes).
+2. `database/initial_mock_data_load_fixed.sql`: Benchmark dataset (50 hospitals, 701 patients, 1,324 visits, 2,891 consents, 4,997 audit entries).
+3. `database/seed_demo_consents.sql`: Persona demo consents, doctor hospital mappings, and sequence calibration.
+4. `database/rls_policies.sql`: Enables and forces Row Level Security across all 10 tables, creates `SECURITY DEFINER` helpers, installs the hardened `v_doctor_directory` view, and revokes `anon` permissions.
+5. `database/perf_and_audit.sql`: Adds chart-load composite indexes, locks down `audit_log` with the SHA-256 hash chain (`prev_hash`, `entry_hash`), and installs append-only triggers (`trg_audit_seal`, `trg_audit_immutable`).
+6. `database/check_rls.sql`: Read-only security audit to verify all 10 tables report `relrowsecurity = true`, `relforcerowsecurity = true`, and active policies.
 
-Authentication is Supabase Auth. AarogyaLink does not store password hashes. After sign-in, Next.js stores an HMAC-signed httpOnly session cookie that names the role returned by `GET /api/auth/lookup`.
+### Security Highlights
+- **Patient Self-Access & Sovereignty**: Patients manage their own consents and inspect their personal audit history.
+- **Consent-Gated Clinical Access**: Clinicians can access patient visits, diagnoses, prescriptions, and lab tests only if an active, current-dated consent exists matching their `doctor_id` or `hospital_id`.
+- **Hospital-Wide Consent Visibility**: Clinicians see facility-level grants.
+- **Immutable Ledger**: Normal users have append-only access; attempts to `UPDATE` or `DELETE` audit records raise an exception.
+- **Tamper-Evident Hash Chain**: Each audit row computes `entry_hash = encode(sha256(payload || prev_hash), 'hex')`.
+- **Privacy-Preserving Directory**: `v_doctor_directory` is owned by `postgres` (`security_invoker = false`), shielding clinician emails and phone numbers from public/patient queries.
+- **Session Integrity**: Supabase Auth handles identity. Next.js stores an HMAC-signed httpOnly cookie (`al_session`) valid for 8 hours.
 
 Audit the live project with `database/check_rls.sql`. The strict check for tables that
 still have RLS disabled is:

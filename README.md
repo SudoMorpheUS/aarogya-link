@@ -177,6 +177,8 @@ erDiagram
         varchar(30) action
         timestamp action_time
         text details
+        text prev_hash
+        text entry_hash
     }
 
     ADMIN_USER {
@@ -301,12 +303,69 @@ WHERE v1.hospital_id <> v2.hospital_id
 ```
 
 ### 5. Indexing and Query Optimization
-B-Tree indexes targeting the high-frequency query paths:
+B-Tree indexes targeting the high-frequency query and chart-assembly paths:
 ```sql
+-- Initial migration indexes (init_migration_001.sql)
 CREATE INDEX IF NOT EXISTS idx_visit_patient ON visit(patient_id);
 CREATE INDEX IF NOT EXISTS idx_consent_patient_status ON consent(patient_id, status);
 CREATE INDEX IF NOT EXISTS idx_lab_test_name_date ON lab_test(test_name, test_date);
 CREATE INDEX IF NOT EXISTS idx_audit_patient_time ON audit_log(patient_id, action_time DESC);
+
+-- Chart load & temporal composite indexes (perf_and_audit.sql)
+CREATE INDEX IF NOT EXISTS idx_diagnosis_visit ON diagnosis(visit_id);
+CREATE INDEX IF NOT EXISTS idx_prescription_visit ON prescription(visit_id);
+CREATE INDEX IF NOT EXISTS idx_lab_test_visit ON lab_test(visit_id);
+CREATE INDEX IF NOT EXISTS idx_visit_patient_date ON visit(patient_id, visit_date DESC);
+```
+
+#### Query Execution Benchmark (Supabase PostgreSQL snapshot — 701 patients, 1,324 visits)
+Measured via `EXPLAIN (ANALYZE, FORMAT JSON)` across 40 iterations (median):
+
+| Query Workflow | Without Indexes | With Indexes | Latency Speed-up | Execution Plan with Indexes |
+| :--- | :---: | :---: | :---: | :--- |
+| **Patient Timeline Lookup** | 0.211 ms | 0.083 ms | **2.5×** | Index Scan on `idx_visit_patient` |
+| **Active Patient Consents** | 0.378 ms | 0.058 ms | **6.5×** | Bitmap Index Scan on `idx_consent_patient_status` |
+| **Duplicate Lab Test View** | 3.915 ms | 3.798 ms | 1.0× | Sequential scans + Hash joins across hospitals |
+| **Audit Trail Retrieval** | 0.550 ms | 0.045 ms | **12.2×** | Index Scan on `idx_audit_patient_time` |
+
+---
+
+### 6. Append-Only Cryptographic Hash Chaining (`perf_and_audit.sql`)
+To ensure complete non-repudiation and tamper evidence without the throughput limits of blockchain, `audit_log` is sealed with SHA-256 hash chaining:
+
+```sql
+-- Hash chain extension
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS prev_hash TEXT;
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS entry_hash TEXT;
+
+-- Cryptographic sealing trigger (runs on BEFORE INSERT)
+CREATE OR REPLACE FUNCTION trg_audit_seal() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+    prev TEXT;
+    payload TEXT;
+BEGIN
+    PERFORM pg_advisory_xact_lock(871234);
+    SELECT entry_hash INTO prev FROM audit_log ORDER BY log_id DESC LIMIT 1;
+    NEW.prev_hash := COALESCE(prev, 'GENESIS');
+    payload := concat_ws('|', COALESCE(NEW.patient_id, ''), COALESCE(NEW.doctor_id, ''),
+                         COALESCE(NEW.action, ''), COALESCE(NEW.action_time::text, ''),
+                         COALESCE(NEW.details, ''), NEW.prev_hash);
+    NEW.entry_hash := encode(sha256(convert_to(payload, 'UTF8')), 'hex');
+    RETURN NEW;
+END;
+$$;
+
+-- Immutability guard (rejects any UPDATE or DELETE)
+CREATE OR REPLACE FUNCTION trg_audit_immutable() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'audit_log is append-only';
+END;
+$$;
+
+CREATE TRIGGER tr_audit_seal BEFORE INSERT ON audit_log FOR EACH ROW EXECUTE FUNCTION trg_audit_seal();
+CREATE TRIGGER tr_audit_immutable BEFORE UPDATE OR DELETE ON audit_log FOR EACH ROW EXECUTE FUNCTION trg_audit_immutable();
 ```
 
 ---
@@ -335,10 +394,12 @@ AarogyaLink enforces strict separation of concerns across three distinct user ro
 
 The only database is the hosted Supabase PostgreSQL project. Apply the SQL files in the Supabase SQL editor in this order:
 
-1. `database/init_migration_001.sql`
-2. `database/initial_mock_data_load_fixed.sql`
-3. `database/seed_demo_consents.sql`
-4. `database/rls_policies.sql`
+1. `database/init_migration_001.sql` (10 core BCNF tables, views, triggers, and functions)
+2. `database/initial_mock_data_load_fixed.sql` (Benchmark dataset: 50 hospitals, 701 patients, 1,324 visits)
+3. `database/seed_demo_consents.sql` (Persona consents and doctor affiliations)
+4. `database/rls_policies.sql` (Strict Row Level Security enabled and forced on all 10 tables)
+5. `database/perf_and_audit.sql` (Chart-load composite indexes and SHA-256 append-only seal)
+6. `database/check_rls.sql` (Security & RLS verification audit)
 
 ### Method 1: Docker Compose (demo)
 
@@ -396,7 +457,7 @@ The login screen features **1-Click Instant Persona Logins** pre-configured for 
 
 | Role | Persona Name | Email | Password | Pre-configured Access & Privileges |
 | :--- | :--- | :--- | :--- | :--- |
-| **Patient** | Mudit Jha | `mudit@gmail.com` | `AarogyaLink@123` | Patient ID `PAT-IN-105001`. Consents and prescriptions for the patient walkthrough. |
+| **Patient** | Archit Singh | `archit@gmail.com` | `AarogyaLink@123` | Patient ID `PAT-IN-105001`. Longitudinal history across Apollo, Fortis, and AIIMS; consents and prescriptions walkthrough. |
 | **Patient** | Karthik Iyer | `karthik.iyer@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1002`. Longitudinal record, consents, and access log. |
 | **Patient** | Devansh Gupta | `devansh.gupta@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1006`. Chart used for the blocked-access and break-glass demo. |
 | **Patient** | Meera Nair | `meera.nair@example.in` | `AarogyaLink@123` | Patient ID `PAT-IN-1005`. Active medicines and remaining course days. |
@@ -428,25 +489,26 @@ arogya-link/
 ├── docker-compose.yml             # Frontend and backend; database is Supabase
 ├── database/
 │   ├── init_migration_001.sql     # Core BCNF Schema (10 tables, views, functions, triggers, indexes)
-│   ├── initial_mock_data_load_fixed.sql # Seed dataset (50 hospitals, 700+ patients, 1300+ visits)
+│   ├── initial_mock_data_load_fixed.sql # Seed dataset (50 hospitals, 701 patients, 1,324 visits)
 │   ├── seed_demo_consents.sql     # Demo patient consents, doctor associations & sequence fix
 │   ├── rls_policies.sql           # Row Level Security policies for production hardening
+│   ├── perf_and_audit.sql         # Chart-load composite indexes & SHA-256 append-only seal
 │   └── check_rls.sql              # Security audit verification script
 ├── frontend/                      # Next.js 16 Web Application (App Router, React 19)
 │   ├── src/
 │   │   ├── app/                   # App Router pages (/dashboard, /consents, /patients, /hospitals, /audit)
 │   │   ├── components/            # UI Components (IdleGuard, VisitForm, AuthCard, ThemeToggle, etc.)
 │   │   └── lib/                   # REST API client, session management, in-memory store
-│   ├── Dockerfile                 # Multi-stage optimized production build
+│   ├── Dockerfile                 # Multi-stage optimized production build (Node 22 standalone)
 │   └── package.json               # Next.js 16.4.2 & React 19.3.0
-├── backend/                       # FastAPI Python REST Application
+├── backend/                       # FastAPI Python REST Application (31 paths, 38 operations)
 │   ├── main.py                    # API entry point, CORS configuration, route inclusion
 │   ├── requirements.txt           # FastAPI, Uvicorn, SQLAlchemy 2.0, Psycopg 3
-│   ├── Dockerfile                 # Python 3.11 container specification
+│   ├── Dockerfile                 # Python 3.12-slim container specification
 │   └── src/
 │       ├── core/                  # Database engines and connection pooling
 │       ├── models/                # SQLAlchemy ORM models matching BCNF tables
-│       └── routers/               # Endpoints: patients, visits, duplicates, consents, hospitals, audit, auth
+│       └── routers/               # 9 routers: patients, visits, duplicates, consents, hospitals, audit, auth, doctors, stats
 └── docs/                          # Detailed DBMS assignment reports & SQL queries
     ├── SLIDE_EXPLANATIONS.md      # Comprehensive slide-by-slide presentation & viva guide
     ├── DATABASE_SCHEMA.md         # Comprehensive schema & data dictionary
@@ -458,5 +520,5 @@ arogya-link/
 ## 🔮 Future Scope
 * **ABDM & HL7/FHIR Integration:** Full interoperability with Ayushman Bharat Digital Mission (ABDM) and standard FHIR resource mapping.
 * **Multi-Factor OTP Consent:** Real-time SMS/WhatsApp OTP authorization when a doctor requests emergency access outside pre-existing consent.
-* **Cryptographic Ledger Integrity:** Merkle-tree hashing or cryptographic sealing for append-only audit verification.
+* **External Timestamp Notarization:** Periodically publish SHA-256 audit-chain root anchors to external public timestamp authorities.
 * **Field-Level Encryption at Rest:** pgcrypto-based column encryption for sensitive diagnostic descriptions and clinical notes.

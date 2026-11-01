@@ -21,11 +21,12 @@ Or with Docker, from the repository root: `docker compose up --build frontend`.
 
 ## How it works
 
-- `src/lib/sample-data.ts` is the Assignment 2 data set: 3 hospitals, 6 doctors, 6 patients, 13 visits, 14 diagnoses, 17 prescriptions, 20 lab tests, 13 consents and 31 audit entries.
-- `src/lib/store.ts` is an in-memory store on the Node server that mirrors the SQL objects: `fn_has_consent`, `sp_grant_consent`, the `visit_audit` trigger and the `v_patient_timeline`, `v_duplicate_lab_tests` and `v_hospital_caseload` views. Restarting the server resets it to the sample data.
-- `src/lib/actions.ts` holds the server actions (sign-in, consent, record visit, emergency access, register patient).
-- `src/app/api/*` are Node route handlers: `/api/health`, `/api/hospitals`, `/api/doctors`, `/api/patients`, `/api/patients/:id/history` (consent-gated and audited) and `/api/duplicates`.
-- Sign-in is a persona picker with no passwords, intended for demos only.
+- **Authentication & Sessions**: The browser authenticates through **Supabase Auth** (`@supabase/supabase-js`). The session route handler (`/api/auth/session`) resolves identity through `GET /api/auth/lookup`, maps it to an authorized role (`patient`, `doctor`, or `admin`), and establishes an **HMAC-signed httpOnly session cookie** (`al_session`) valid for 8 hours.
+- **Database Connection**: Reads and writes directly to hosted **Supabase PostgreSQL** through the FastAPI backend and Next.js route handlers.
+- **Offline / Standalone Fallback**: If the database is unreachable, `src/lib/store.ts` provides an in-memory mock store preserving the SQL logic (`fn_has_consent`, `sp_grant_consent`, triggers, and analytical views) for offline demonstration.
+- **Server Actions** (`src/lib/actions.ts`): Coordinates authentication, dynamic consent granting/revocation, encounter creation, patient registration, and break-glass emergency access.
+- **Route Handlers** (`src/app/api/*`): Server-side REST endpoints: `/api/auth/session`, `/api/health`, `/api/hospitals`, `/api/doctors`, `/api/patients`, `/api/patients/[id]/history`, and `/api/duplicates`.
+- **Demo Personas**: 1-Click Instant Login panel on `/` with pre-configured personas (Archit Singh, Karthik Iyer, Devansh Gupta, Meera Nair, Dr. Rohan Mehta, Dr. Nisha Kapoor, Dr. Vikram Sharma, Central Admin). Universal demo password: `AarogyaLink@123`.
 
 ## Roles
 

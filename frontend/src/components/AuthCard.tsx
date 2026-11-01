@@ -16,9 +16,9 @@ const DEMO_PASSWORD = "AarogyaLink@123";
 
 const DEMO_PERSONAS = [
   {
-    label: "Mudit Jha",
+    label: "Archit Singh",
     roleLabel: "Patient",
-    email: "mudit@gmail.com",
+    email: "archit@gmail.com",
     role: "patient" as Role,
   },
   {

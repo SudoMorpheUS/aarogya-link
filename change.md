@@ -20,7 +20,7 @@ This document provides a step-by-step walkthrough to demonstrate all database co
   - Normalizes hospital foreign keys (`hospital_id` &rarr; `hospital.hospital_id`), auto-generates `DOC-XXXX`, and stores email and license number.
 
 ### C. Clinical Visit Encounter
-- **Where to show:** Log in as `Dr. Rohan Mehta` &rarr; Open patient `Mudit Jha` (`/patients/PAT-IN-105001`) &rarr; Click **"Record visit"** (`/visits/new`).
+- **Where to show:** Log in as `Dr. Rohan Mehta` &rarr; Open patient `Archit Singh` (`/patients/PAT-IN-105001`) &rarr; Click **"Record visit"** (`/visits/new`).
 - Add ICD-10 diagnosis codes, prescription details (drug, dose, frequency, duration), and lab test results &rarr; Click **"Save visit"**.
 - **Underlying SQL / Backend:**
   - Endpoint: `POST /api/visits` in [`backend/src/routers/visits.py`](backend/src/routers/visits.py)
@@ -28,7 +28,7 @@ This document provides a step-by-step walkthrough to demonstrate all database co
   - Fires PostgreSQL database trigger `tr_visit_audit` on `AFTER INSERT ON visit`.
 
 ### D. Granting Consent
-- **Where to show:** Log in as patient `Mudit Jha` &rarr; Navigate to `/consents` &rarr; Select a target hospital or doctor, valid start date, and expiry &rarr; Click **"Allow access"**.
+- **Where to show:** Log in as patient `Archit Singh` &rarr; Navigate to `/consents` &rarr; Select a target hospital or doctor, valid start date, and expiry &rarr; Click **"Allow access"**.
 - **Underlying SQL / Backend:**
   - Invokes stored procedure `sp_grant_consent(...)` which writes to `consent` and `audit_log`.
 

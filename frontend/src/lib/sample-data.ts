@@ -54,6 +54,7 @@ export const patients: Patient[] = [
   { patient_id: "PAT-IN-1004", full_name: "Rajesh Patel", date_of_birth: "1981-01-09", gender: "M", blood_group: "AB+", contact_number: "9725019988", email: "rajesh.patel@example.in" },
   { patient_id: "PAT-IN-1005", full_name: "Meera Nair", date_of_birth: "1955-05-30", gender: "F", blood_group: "O-", contact_number: "9447012233", email: "meera.nair@example.in" },
   { patient_id: "PAT-IN-1006", full_name: "Devansh Gupta", date_of_birth: "2007-09-14", gender: "M", blood_group: "B-", contact_number: "9876543210", email: "devansh.gupta@example.in" },
+  { patient_id: "PAT-IN-105001", full_name: "Archit Singh", date_of_birth: "1998-04-12", gender: "M", blood_group: "O+", contact_number: "9876500105", email: "archit@gmail.com" },
 ];
 
 const v = (
@@ -80,6 +81,9 @@ export const visits: Visit[] = [
   v(11, "PAT-IN-1005", "HSP-03", "DOC-05", "2026-01-16T12:00:00", "OPD", "Knee pain, difficulty climbing stairs"),
   v(12, "PAT-IN-1005", "HSP-02", "DOC-04", "2026-08-28T15:20:00", "OPD", "Annual labs and medication review"),
   v(13, "PAT-IN-1006", "HSP-02", "DOC-03", "2026-08-11T19:05:00", "Emergency", "Twisted ankle during cricket"),
+  v(14, "PAT-IN-105001", "HSP-01", "DOC-01", "2026-09-08T11:00:00", "OPD", "Palpitations and mild chest discomfort"),
+  v(15, "PAT-IN-105001", "HSP-02", "DOC-04", "2026-10-05T14:30:00", "OPD", "Metabolic health review and chronic fatigue"),
+  v(16, "PAT-IN-105001", "HSP-03", "DOC-05", "2026-10-20T09:15:00", "Emergency", "Acute right knee twisting injury during football match"),
 ];
 
 const dx = (diagnosis_id: number, visit_id: number, disease_code: string, description: string): Diagnosis => ({
@@ -105,6 +109,9 @@ export const diagnoses: Diagnosis[] = [
   dx(12, 11, "M17.9", "Osteoarthritis of knee, unspecified"),
   dx(13, 12, "Z00.00", "General adult medical examination"),
   dx(14, 13, "S93.40", "Sprain of ankle, unspecified"),
+  dx(15, 14, "I49.9", "Cardiac arrhythmia, unspecified"),
+  dx(16, 15, "E11.9", "Type 2 diabetes mellitus without complications"),
+  dx(17, 16, "S83.5", "Sprain and strain of anterior cruciate ligament of knee"),
 ];
 
 const rx = (
@@ -134,6 +141,10 @@ export const prescriptions: Prescription[] = [
   rx(15, 11, "Glucosamine", "1500 mg", "Once daily", "60 days"),
   rx(16, 12, "Amlodipine", "5 mg", "Once daily", "90 days"),
   rx(17, 13, "Ibuprofen", "400 mg", "Three times daily after food", "5 days"),
+  rx(18, 14, "Metoprolol", "25 mg", "Twice daily", "30 days"),
+  rx(19, 15, "Metformin", "500 mg", "Twice daily with meals", "60 days"),
+  rx(20, 16, "Aceclofenac + Paracetamol", "100mg/325mg", "Twice daily after meals", "7 days"),
+  rx(21, 16, "Pantoprazole", "40 mg", "Once daily before breakfast", "7 days"),
 ];
 
 const lab = (
@@ -172,6 +183,12 @@ export const labTests: LabTest[] = [
   lab(18, 12, "TSH", "2.4", "mIU/L"),
   lab(19, 12, "LDL Cholesterol", "118", "mg/dL"),
   lab(20, 12, "Serum Creatinine", "0.9", "mg/dL"),
+  lab(21, 14, "ECG", "Sinus tachycardia", ""),
+  lab(22, 14, "TSH", "2.1", "mIU/L"),
+  lab(23, 15, "HbA1c", "6.5", "%"),
+  lab(24, 15, "Fasting Glucose", "126", "mg/dL"),
+  lab(25, 16, "Serum Uric Acid", "4.8", "mg/dL"),
+  lab(26, 16, "C-Reactive Protein (CRP)", "12.4", "mg/L"),
 ];
 
 const c = (
@@ -213,6 +230,12 @@ export const consents: Consent[] = [
   c(25, "PAT-IN-1005", null, "DOC-04", "2026-08-25", null, "Active"),
   c(26, "PAT-IN-1005", null, "DOC-05", "2026-01-14", null, "Active"),
   c(27, "PAT-IN-1006", null, "DOC-03", "2026-08-11", null, "Active"),
+  c(28, "PAT-IN-105001", "HSP-01", null, "2026-07-01", null, "Active"),
+  c(29, "PAT-IN-105001", "HSP-02", null, "2026-08-01", null, "Active"),
+  c(30, "PAT-IN-105001", "HSP-03", null, "2026-09-01", null, "Active"),
+  c(31, "PAT-IN-105001", null, "DOC-01", "2026-07-01", null, "Active"),
+  c(32, "PAT-IN-105001", null, "DOC-04", "2026-08-01", null, "Active"),
+  c(33, "PAT-IN-105001", null, "DOC-05", "2026-09-01", null, "Active"),
 ];
 
 const log = (

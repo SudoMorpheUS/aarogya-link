@@ -32,6 +32,7 @@ DEMO_PASSWORD = "AarogyaLink@123"
 DEMO_EMAILS = frozenset(
     {
         "admin@arogyalink.in",
+        "archit@gmail.com",
         "mudit@gmail.com",
         "karthik.iyer@example.in",
         "devansh.gupta@example.in",
